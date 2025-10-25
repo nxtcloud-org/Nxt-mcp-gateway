@@ -437,9 +437,6 @@ async def initialize_session(mcp_config=None):
             return False
 
 
-# 설정 관련 코드는 pages/1_⚙️_설정.py로 이동됨
-
-
 # --- 모델 설정 탭 ---
 with model_container:
     st.subheader("🤖 AI 모델 설정")
