@@ -18,9 +18,7 @@ if "event_loop" not in st.session_state:
     asyncio.set_event_loop(loop)
 
 from langgraph.prebuilt import create_react_agent
-from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage
-from dotenv import load_dotenv
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from utils import astream_graph, random_uuid
 from langchain_core.messages.ai import AIMessageChunk
@@ -28,9 +26,6 @@ from langchain_core.messages.tool import ToolMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.runnables import RunnableConfig
 from model_providers import ModelManager, ModelProviderError
-
-# 환경 변수 로드 (.env 파일에서 API 키 등의 설정을 가져옴)
-load_dotenv(override=True)
 
 # MCP 설정 파일 경로 설정
 CONFIG_FILE_PATH = "mcp_config.json"
@@ -161,9 +156,9 @@ Guidelines:
 # OUTPUT_TOKEN_INFO는 이제 ModelManager에서 관리되므로 제거
 # 모델별 토큰 정보는 model_providers.py의 ModelConfig에서 관리됨
 
-# 환경변수에서 시스템 설정 로드
-TIMEOUT_SECONDS = int(os.environ.get("TIMEOUT_SECONDS", "120"))
-RECURSION_LIMIT = int(os.environ.get("RECURSION_LIMIT", "100"))
+# 시스템 설정
+TIMEOUT_SECONDS = 120
+RECURSION_LIMIT = 100
 
 # 세션 상태 초기화
 if "session_initialized" not in st.session_state:
