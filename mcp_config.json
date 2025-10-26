@@ -1,4 +1,11 @@
 {
+  "get_current_time": {
+    "command": "python",
+    "args": [
+      "./mcp_servers/time.py"
+    ],
+    "transport": "stdio"
+  },
   "fitness_calculator": {
     "command": "python",
     "args": [
