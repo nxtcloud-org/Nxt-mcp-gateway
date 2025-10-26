@@ -27,6 +27,7 @@ from langchain_core.messages.ai import AIMessageChunk
 from langchain_core.messages.tool import ToolMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.runnables import RunnableConfig
+from model_providers import ModelManager, ModelProviderError
 
 # 환경 변수 로드 (.env 파일에서 API 키 등의 설정을 가져옴)
 load_dotenv(override=True)
@@ -157,10 +158,8 @@ Guidelines:
 </OUTPUT_FORMAT>
 """
 
-OUTPUT_TOKEN_INFO = {
-    "gpt-4o": {"max_tokens": 16000},
-    "gpt-4o-mini": {"max_tokens": 16000},
-}
+# OUTPUT_TOKEN_INFO는 이제 ModelManager에서 관리되므로 제거
+# 모델별 토큰 정보는 model_providers.py의 ModelConfig에서 관리됨
 
 # 환경변수에서 시스템 설정 로드
 TIMEOUT_SECONDS = int(os.environ.get("TIMEOUT_SECONDS", "120"))
@@ -172,7 +171,10 @@ if "session_initialized" not in st.session_state:
     st.session_state.agent = None  # ReAct 에이전트 객체 저장 공간
     st.session_state.history = []  # 대화 기록 저장 리스트
     st.session_state.mcp_client = None  # MCP 클라이언트 객체 저장 공간
-    st.session_state.selected_model = "gpt-4o"  # 기본 모델 선택
+    st.session_state.selected_model = (
+        "openai:gpt-4o"  # 기본 모델 선택 (provider:model 형식)
+    )
+    st.session_state.model_manager = ModelManager()  # 모델 매니저 인스턴스
 
 if "thread_id" not in st.session_state:
     st.session_state.thread_id = random_uuid()
@@ -410,31 +412,27 @@ async def initialize_session(mcp_config=None):
             mcp_config = load_config_from_json()
 
         try:
-            # API 키 확인
-            api_key = st.session_state.get("openai_api_key", "")
-            if not api_key:
-                st.error(
-                    "❌ OpenAI API 키가 설정되지 않았습니다. 모델 설정 탭에서 API 키를 입력해주세요."
-                )
-                return False
-
-            # 환경변수에 API 키 설정 (ChatOpenAI가 사용할 수 있도록)
-            os.environ["OPENAI_API_KEY"] = api_key
-
+            # MCP 클라이언트 초기화
             client = MultiServerMCPClient(mcp_config)
-            # 새로운 API 사용: context manager 대신 직접 get_tools 호출
             tools = await client.get_tools()
             st.session_state.tool_count = len(tools)
             st.session_state.mcp_client = client
 
-            # OpenAI 모델 초기화
-            selected_model = st.session_state.selected_model
-            model = ChatOpenAI(
-                model=selected_model,
-                temperature=0.1,
-                max_tokens=OUTPUT_TOKEN_INFO[selected_model]["max_tokens"],
-                api_key=api_key,  # 명시적으로 API 키 전달
-            )
+            # 선택된 모델로 모델 인스턴스 생성
+            selected_model_key = st.session_state.selected_model
+
+            try:
+                model = st.session_state.model_manager.create_model(
+                    model_key=selected_model_key, temperature=0.1
+                )
+            except ModelProviderError as e:
+                st.error(str(e))
+                return False
+            except Exception as e:
+                st.error(f"❌ 모델 생성 중 오류 발생: {str(e)}")
+                return False
+
+            # LangGraph 에이전트 생성
             agent = create_react_agent(
                 model,
                 tools,
