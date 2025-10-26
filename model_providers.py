@@ -24,6 +24,12 @@ class ModelConfig:
     max_tokens: int
     temperature_range: Tuple[float, float]
     supports_streaming: bool
+    description: str = ""
+    pricing_tier: str = ""  # e.g., "Standard", "Premium", "Enterprise"
+    capabilities: List[str] = field(
+        default_factory=list
+    )  # e.g., ["text", "code", "reasoning"]
+    context_window: int = 0  # Total context window size
     additional_params: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -166,6 +172,8 @@ class BedrockProvider(ModelProvider):
 MODEL_REGISTRY = {
     "openai": {
         "provider_class": OpenAIProvider,
+        "display_name": "OpenAI",
+        "description": "OpenAI's GPT models with advanced reasoning capabilities",
         "models": {
             "gpt-4o": ModelConfig(
                 display_name="OpenAI GPT-4o",
@@ -173,6 +181,16 @@ MODEL_REGISTRY = {
                 max_tokens=16000,
                 temperature_range=(0.0, 2.0),
                 supports_streaming=True,
+                description="최신 멀티모달 모델로 텍스트, 이미지, 오디오 처리 가능",
+                pricing_tier="Premium",
+                capabilities=[
+                    "text",
+                    "code",
+                    "reasoning",
+                    "multimodal",
+                    "function_calling",
+                ],
+                context_window=128000,
             ),
             "gpt-4o-mini": ModelConfig(
                 display_name="OpenAI GPT-4o Mini",
@@ -180,11 +198,17 @@ MODEL_REGISTRY = {
                 max_tokens=16000,
                 temperature_range=(0.0, 2.0),
                 supports_streaming=True,
+                description="빠르고 효율적인 경량 모델",
+                pricing_tier="Standard",
+                capabilities=["text", "code", "reasoning", "function_calling"],
+                context_window=128000,
             ),
         },
     },
     "bedrock": {
         "provider_class": BedrockProvider,
+        "display_name": "AWS Bedrock",
+        "description": "AWS Bedrock을 통한 Anthropic Claude 모델 접근",
         "models": {
             "claude-3-5-haiku": ModelConfig(
                 display_name="AWS Bedrock Claude 3.5 Haiku",
@@ -192,6 +216,10 @@ MODEL_REGISTRY = {
                 max_tokens=8192,
                 temperature_range=(0.0, 1.0),
                 supports_streaming=True,
+                description="Anthropic의 빠르고 효율적인 Claude 모델",
+                pricing_tier="Standard",
+                capabilities=["text", "code", "reasoning", "analysis"],
+                context_window=200000,
                 additional_params={"region": "us-east-1"},
             )
         },
@@ -288,6 +316,46 @@ class ModelManager:
 
         provider_info = self.providers[provider_name]
         return provider_info["models"].get(model_name)
+
+    def get_provider_info(self, provider_name: str) -> Optional[Dict[str, Any]]:
+        """Get provider configuration information"""
+        if provider_name not in MODEL_REGISTRY:
+            return None
+
+        registry_info = MODEL_REGISTRY[provider_name]
+        is_registered = self.is_provider_registered(provider_name)
+
+        return {
+            "display_name": registry_info.get("display_name", provider_name),
+            "description": registry_info.get("description", ""),
+            "is_registered": is_registered,
+            "model_count": len(registry_info["models"]) if is_registered else 0,
+        }
+
+    def get_all_providers_info(self) -> Dict[str, Dict[str, Any]]:
+        """Get information about all available providers"""
+        providers_info = {}
+        for provider_name in MODEL_REGISTRY.keys():
+            providers_info[provider_name] = self.get_provider_info(provider_name)
+        return providers_info
+
+    def get_models_by_capability(self, capability: str) -> List[Dict[str, str]]:
+        """Get models that support a specific capability"""
+        matching_models = []
+
+        for provider_name, provider_info in self.providers.items():
+            for model_key, model_config in provider_info["models"].items():
+                if capability in model_config.capabilities:
+                    matching_models.append(
+                        {
+                            "key": f"{provider_name}:{model_key}",
+                            "display": model_config.display_name,
+                            "provider": provider_name,
+                            "model_key": model_key,
+                        }
+                    )
+
+        return matching_models
 
     def cleanup_credentials(self):
         """Clean up sensitive data from memory"""
