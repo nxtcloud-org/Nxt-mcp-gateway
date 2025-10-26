@@ -36,7 +36,27 @@
 
 ## 🚀 빠른 시작
 
-### 1. 설치
+### 방법 1: Docker 사용 (권장) 🐳
+
+```bash
+# Docker Hub에서 이미지 다운로드 및 실행
+docker run -p 8501:8501 glen15/nxt-mcp-gateway:latest
+```
+
+브라우저에서 `http://localhost:8501` 접속
+
+### 방법 2: Docker Compose 사용
+
+```bash
+# 저장소 클론
+git clone <repository-url>
+cd nxt-mcp-gateway
+
+# Docker Compose로 실행
+docker-compose up -d
+```
+
+### 방법 3: 로컬 개발 환경
 
 ```bash
 # 저장소 클론
@@ -49,11 +69,8 @@ source venv/bin/activate  # Windows: venv\Scripts\activate
 
 # 의존성 설치
 pip install -r requirements.txt
-```
 
-### 2. 실행
-
-```bash
+# 실행
 streamlit run app.py
 ```
 
@@ -117,6 +134,41 @@ MCP 도구 탭에서 JSON 형식으로 새 서버 추가:
 - `nest-asyncio`: 비동기 처리
 - `pytz`: 시간대 처리
 
+## 🐳 Docker 사용법
+
+### 이미지 빌드
+
+```bash
+# 로컬에서 이미지 빌드
+docker build -t glen15/nxt-mcp-gateway:latest .
+
+# 또는 Docker Hub 업로드 스크립트 사용
+./push-to-dockerhub.sh glen15
+```
+
+### 실행 옵션
+
+```bash
+# 기본 실행
+docker run -p 8501:8501 glen15/nxt-mcp-gateway:latest
+
+# 백그라운드 실행
+docker run -d -p 8501:8501 --name nxt-mcp-gateway glen15/nxt-mcp-gateway:latest
+
+# MCP 설정 파일 마운트
+docker run -p 8501:8501 -v $(pwd)/mcp_config.json:/app/mcp_config.json glen15/nxt-mcp-gateway:latest
+```
+
+### Docker Hub 배포
+
+```bash
+# Docker Hub에 로그인
+docker login
+
+# 이미지 푸시
+docker push glen15/nxt-mcp-gateway:latest
+```
+
 ## 🛠️ 개발
 
 ### 프로젝트 구조
@@ -127,6 +179,9 @@ MCP 도구 탭에서 JSON 형식으로 새 서버 추가:
 ├── utils.py              # 유틸리티 함수
 ├── mcp_servers/          # 내장 MCP 서버들
 ├── requirements.txt      # Python 의존성
+├── Dockerfile            # Docker 이미지 빌드 파일
+├── docker-compose.yml    # Docker Compose 설정
+├── build.sh             # Docker 빌드 스크립트
 └── README.md            # 프로젝트 문서
 ```
 

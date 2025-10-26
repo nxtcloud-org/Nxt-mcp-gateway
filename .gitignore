@@ -120,6 +120,7 @@ celerybeat.pid
 *.sage.py
 
 # Environments
+push-to-dockerhub.sh
 .kiro
 .env
 .venv
