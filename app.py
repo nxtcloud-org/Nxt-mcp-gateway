@@ -403,7 +403,7 @@ async def initialize_session(mcp_config=None):
     반환값:
         bool: 초기화 성공 여부
     """
-    with st.spinner("🔄 MCP 서버에 연결 중..."):
+    with st.spinner("🔄 MCP 서버 및 AI 모델 초기화 중..."):
         # 먼저 기존 클라이언트를 안전하게 정리
         await cleanup_mcp_client()
 
@@ -412,15 +412,34 @@ async def initialize_session(mcp_config=None):
             mcp_config = load_config_from_json()
 
         try:
-            # MCP 클라이언트 초기화
+            # 1. 선택된 모델 검증
+            selected_model_key = st.session_state.selected_model
+
+            if ":" not in selected_model_key:
+                st.error("❌ 잘못된 모델 형식입니다. 제공자를 선택해주세요.")
+                return False
+
+            provider_name = selected_model_key.split(":")[0]
+
+            # 제공자가 등록되어 있는지 확인
+            if not st.session_state.model_manager.is_provider_registered(provider_name):
+                provider_display = (
+                    "OpenAI" if provider_name == "openai" else "AWS Bedrock"
+                )
+                st.error(
+                    f"❌ {provider_display} 제공자가 등록되지 않았습니다. 모델 설정 탭에서 API 키를 설정해주세요."
+                )
+                return False
+
+            # 2. MCP 클라이언트 초기화
+            st.info("🔗 MCP 서버에 연결 중...")
             client = MultiServerMCPClient(mcp_config)
             tools = await client.get_tools()
             st.session_state.tool_count = len(tools)
             st.session_state.mcp_client = client
 
-            # 선택된 모델로 모델 인스턴스 생성
-            selected_model_key = st.session_state.selected_model
-
+            # 3. 모델 인스턴스 생성
+            st.info(f"🤖 {selected_model_key} 모델 초기화 중...")
             try:
                 model = st.session_state.model_manager.create_model(
                     model_key=selected_model_key, temperature=0.1
@@ -429,21 +448,60 @@ async def initialize_session(mcp_config=None):
                 st.error(str(e))
                 return False
             except Exception as e:
-                st.error(f"❌ 모델 생성 중 오류 발생: {str(e)}")
+                # 제공자별 구체적인 에러 메시지
+                if provider_name == "bedrock":
+                    if "credentials" in str(e).lower():
+                        st.error(
+                            "❌ AWS Bedrock 인증에 실패했습니다. API 키를 확인하고 다시 시도해주세요."
+                        )
+                    elif "region" in str(e).lower():
+                        st.error(
+                            "❌ AWS 리전 설정에 문제가 있습니다. us-east-1 리전을 사용하는지 확인해주세요."
+                        )
+                    else:
+                        st.error(f"❌ AWS Bedrock 모델 생성 중 오류: {str(e)}")
+                elif provider_name == "openai":
+                    if "api_key" in str(e).lower() or "unauthorized" in str(e).lower():
+                        st.error(
+                            "❌ OpenAI API 키가 유효하지 않습니다. 키를 확인하고 다시 시도해주세요."
+                        )
+                    else:
+                        st.error(f"❌ OpenAI 모델 생성 중 오류: {str(e)}")
+                else:
+                    st.error(f"❌ 모델 생성 중 오류 발생: {str(e)}")
                 return False
 
-            # LangGraph 에이전트 생성
-            agent = create_react_agent(
-                model,
-                tools,
-                checkpointer=MemorySaver(),
-                prompt=SYSTEM_PROMPT,
-            )
-            st.session_state.agent = agent
-            st.session_state.session_initialized = True
-            return True
+            # 4. LangGraph 에이전트 생성
+            st.info("🔧 AI 에이전트 구성 중...")
+            try:
+                agent = create_react_agent(
+                    model,
+                    tools,
+                    checkpointer=MemorySaver(),
+                    prompt=SYSTEM_PROMPT,
+                )
+                st.session_state.agent = agent
+                st.session_state.session_initialized = True
+
+                # 성공 메시지
+                model_info = st.session_state.model_manager.get_model_info(
+                    selected_model_key
+                )
+                if model_info:
+                    st.success(
+                        f"✅ {model_info.display_name} 모델이 성공적으로 초기화되었습니다!"
+                    )
+                else:
+                    st.success("✅ AI 모델이 성공적으로 초기화되었습니다!")
+
+                return True
+
+            except Exception as e:
+                st.error(f"❌ AI 에이전트 생성 중 오류 발생: {str(e)}")
+                return False
+
         except Exception as e:
-            st.error(f"MCP 클라이언트 초기화 중 오류 발생: {str(e)}")
+            st.error(f"❌ 초기화 중 예상치 못한 오류 발생: {str(e)}")
             return False
 
 
@@ -451,41 +509,43 @@ async def initialize_session(mcp_config=None):
 with model_container:
     st.subheader("🤖 AI 모델 설정")
 
-    # API 키 입력 섹션
+    # 세션 상태 초기화
+    if "openai_api_key" not in st.session_state:
+        st.session_state.openai_api_key = ""
+    if "bedrock_api_key" not in st.session_state:
+        st.session_state.bedrock_api_key = ""
+
+    # OpenAI API 키 설정 섹션
     st.markdown("### 🔑 OpenAI API 키 설정")
 
-    # 세션 상태에 API 키 저장
-    if "openai_api_key" not in st.session_state:
-        # 처음에는 빈 문자열로 초기화
-        st.session_state.openai_api_key = ""
-
-    # API 키 입력 필드 (항상 빈칸으로 시작)
-    api_key_input = st.text_input(
+    openai_api_key_input = st.text_input(
         "OpenAI API 키",
-        value="",  # 항상 빈칸으로 시작
+        value="",
         type="password",
         help="OpenAI API 키를 입력하세요. sk-로 시작하는 키입니다.",
         placeholder="sk-proj-...",
+        key="openai_api_key_input",
     )
 
-    # API 키 적용 버튼
     col1, col2 = st.columns([3, 1])
     with col2:
-        if st.button("🔑 API 키 적용", key="apply_api_key", use_container_width=True):
-            if api_key_input.strip():
-                # 세션 상태와 환경변수에 저장
-                st.session_state.openai_api_key = api_key_input.strip()
-                os.environ["OPENAI_API_KEY"] = api_key_input.strip()
-                st.success("✅ API 키가 적용되었습니다.")
-                st.rerun()
+        if st.button(
+            "🔑 OpenAI 키 적용", key="apply_openai_key", use_container_width=True
+        ):
+            if openai_api_key_input.strip():
+                if st.session_state.model_manager.register_provider(
+                    "openai", openai_api_key_input.strip()
+                ):
+                    st.session_state.openai_api_key = openai_api_key_input.strip()
+                    st.success("✅ OpenAI API 키가 적용되었습니다.")
+                    st.rerun()
+                else:
+                    st.error("❌ 유효하지 않은 OpenAI API 키입니다.")
             else:
                 st.error("❌ API 키를 입력해주세요.")
 
-    # API 키 상태 확인
-    has_openai_key = bool(st.session_state.openai_api_key)
-    if has_openai_key:
-        available_models = ["gpt-4o", "gpt-4o-mini"]
-        # API 키 마스킹해서 표시
+    # OpenAI 상태 표시
+    if st.session_state.model_manager.is_provider_registered("openai"):
         masked_key = (
             st.session_state.openai_api_key[:7]
             + "..."
@@ -496,44 +556,163 @@ with model_container:
         st.success(f"✅ OpenAI API 키가 설정되어 있습니다. ({masked_key})")
     else:
         st.warning("⚠️ OpenAI API 키를 입력해주세요.")
-        available_models = ["gpt-4o", "gpt-4o-mini"]  # API 키 없어도 선택은 가능하게
 
     st.divider()
 
-    # 모델 선택 드롭다운
-    st.markdown("### 🧠 모델 선택")
-    previous_model = st.session_state.selected_model
-    st.session_state.selected_model = st.selectbox(
-        "사용할 모델 선택",
-        options=available_models,
-        index=(
-            available_models.index(st.session_state.selected_model)
-            if st.session_state.selected_model in available_models
-            else 0
-        ),
-        help="OpenAI 모델을 선택하세요. API 키가 필요합니다.",
-        disabled=not has_openai_key,
+    # AWS Bedrock API 키 설정 섹션
+    st.markdown("### 🔑 AWS Bedrock API 키 설정")
+
+    bedrock_api_key_input = st.text_input(
+        "AWS Bedrock API 키",
+        value="",
+        type="password",
+        help="AWS Bedrock API 키를 입력하세요. Cross Region Inference를 위해 us-east-1 리전을 사용합니다.",
+        placeholder="bedrock-api-key-...",
+        key="bedrock_api_key_input",
     )
 
-    # 모델이 변경되었을 때 세션 초기화 필요 알림
-    if (
-        previous_model != st.session_state.selected_model
-        and st.session_state.session_initialized
-    ):
-        st.warning(
-            "⚠️ 모델이 변경되었습니다. MCP 도구 탭에서 '설정 적용하기' 버튼을 눌러 변경사항을 적용하세요."
+    col1, col2 = st.columns([3, 1])
+    with col2:
+        if st.button(
+            "🔑 Bedrock 키 적용", key="apply_bedrock_key", use_container_width=True
+        ):
+            if bedrock_api_key_input.strip():
+                if st.session_state.model_manager.register_provider(
+                    "bedrock", bedrock_api_key_input.strip()
+                ):
+                    st.session_state.bedrock_api_key = bedrock_api_key_input.strip()
+                    st.success("✅ AWS Bedrock API 키가 적용되었습니다.")
+                    st.rerun()
+                else:
+                    st.error("❌ 유효하지 않은 AWS Bedrock API 키입니다.")
+            else:
+                st.error("❌ API 키를 입력해주세요.")
+
+    # Bedrock 상태 표시
+    if st.session_state.model_manager.is_provider_registered("bedrock"):
+        masked_key = (
+            st.session_state.bedrock_api_key[:7]
+            + "..."
+            + st.session_state.bedrock_api_key[-4:]
+            if len(st.session_state.bedrock_api_key) > 11
+            else "설정됨"
         )
+        st.success(f"✅ AWS Bedrock API 키가 설정되어 있습니다. ({masked_key})")
+        st.info("🌍 Cross Region Inference 활성화 (us-east-1 리전)")
+    else:
+        st.warning("⚠️ AWS Bedrock API 키를 입력해주세요.")
 
     st.divider()
 
-    # 모델 정보 표시
-    st.subheader("📊 현재 모델 정보")
-    st.write(f"🧠 선택된 모델: **{st.session_state.selected_model}**")
+    # 통합 모델 선택 섹션
+    st.markdown("### 🧠 모델 선택")
 
-    if st.session_state.selected_model == "gpt-4o":
-        st.info("🚀 **GPT-4o**: 최신 멀티모달 모델로 텍스트, 이미지, 오디오 처리 가능")
-    elif st.session_state.selected_model == "gpt-4o-mini":
-        st.info("⚡ **GPT-4o-mini**: 빠르고 효율적인 경량 모델")
+    available_models = st.session_state.model_manager.get_available_models()
+
+    if available_models:
+        # 모델 선택 드롭다운
+        model_options = [model["key"] for model in available_models]
+
+        # 현재 선택된 모델이 사용 가능한지 확인
+        current_selection = st.session_state.selected_model
+        if current_selection not in model_options and model_options:
+            current_selection = model_options[0]
+            st.session_state.selected_model = current_selection
+
+        def format_model_display(model_key):
+            model_info = next(
+                (m for m in available_models if m["key"] == model_key), None
+            )
+            if model_info:
+                provider_badge = "🤖" if model_info["provider"] == "openai" else "☁️"
+                return f"{provider_badge} {model_info['display']}"
+            return model_key
+
+        previous_model = st.session_state.selected_model
+        selected_model = st.selectbox(
+            "사용할 모델 선택",
+            options=model_options,
+            index=(
+                model_options.index(current_selection)
+                if current_selection in model_options
+                else 0
+            ),
+            format_func=format_model_display,
+            help="등록된 제공자의 모델을 선택하세요.",
+            key="model_selector",
+        )
+
+        st.session_state.selected_model = selected_model
+
+        # 모델이 변경되었을 때 세션 초기화 필요 알림
+        if previous_model != selected_model and st.session_state.session_initialized:
+            st.warning(
+                "⚠️ 모델이 변경되었습니다. MCP 도구 탭에서 '설정 적용하기' 버튼을 눌러 변경사항을 적용하세요."
+            )
+
+        st.divider()
+
+        # 선택된 모델 정보 표시
+        st.subheader("📊 현재 모델 정보")
+        model_config = st.session_state.model_manager.get_model_info(selected_model)
+
+        if model_config:
+            provider_name = selected_model.split(":")[0]
+            provider_info = st.session_state.model_manager.get_provider_info(
+                provider_name
+            )
+
+            col1, col2 = st.columns([2, 1])
+            with col1:
+                st.write(f"🧠 **선택된 모델:** {model_config.display_name}")
+                st.write(f"🏢 **제공자:** {provider_info['display_name']}")
+                if model_config.description:
+                    st.info(f"📝 {model_config.description}")
+
+            with col2:
+                st.metric("최대 토큰", f"{model_config.max_tokens:,}")
+                st.metric("컨텍스트 윈도우", f"{model_config.context_window:,}")
+
+            # 모델 기능 표시
+            if model_config.capabilities:
+                st.write("**🎯 지원 기능:**")
+                capability_badges = []
+                for cap in model_config.capabilities:
+                    if cap == "text":
+                        capability_badges.append("📝 텍스트")
+                    elif cap == "code":
+                        capability_badges.append("💻 코드")
+                    elif cap == "reasoning":
+                        capability_badges.append("🧠 추론")
+                    elif cap == "multimodal":
+                        capability_badges.append("🎨 멀티모달")
+                    elif cap == "function_calling":
+                        capability_badges.append("🔧 함수 호출")
+                    elif cap == "analysis":
+                        capability_badges.append("📊 분석")
+                    else:
+                        capability_badges.append(f"✨ {cap}")
+
+                st.write(" • ".join(capability_badges))
+
+            # 가격 등급 표시
+            if model_config.pricing_tier:
+                tier_color = "🟢" if model_config.pricing_tier == "Standard" else "🟡"
+                st.write(f"**💰 가격 등급:** {tier_color} {model_config.pricing_tier}")
+    else:
+        st.warning("⚠️ 사용 가능한 모델이 없습니다. 위에서 API 키를 설정해주세요.")
+
+        # 제공자 상태 요약 표시
+        st.markdown("### 📋 제공자 상태")
+        providers_info = st.session_state.model_manager.get_all_providers_info()
+
+        for provider_name, info in providers_info.items():
+            status_icon = "✅" if info["is_registered"] else "❌"
+            st.write(
+                f"{status_icon} **{info['display_name']}**: {'등록됨' if info['is_registered'] else '미등록'}"
+            )
+            if info["description"]:
+                st.caption(f"   {info['description']}")
 
 # --- MCP 도구 설정 탭 ---
 with mcp_container:
