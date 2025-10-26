@@ -410,6 +410,17 @@ async def initialize_session(mcp_config=None):
             mcp_config = load_config_from_json()
 
         try:
+            # API 키 확인
+            api_key = st.session_state.get("openai_api_key", "")
+            if not api_key:
+                st.error(
+                    "❌ OpenAI API 키가 설정되지 않았습니다. 모델 설정 탭에서 API 키를 입력해주세요."
+                )
+                return False
+
+            # 환경변수에 API 키 설정 (ChatOpenAI가 사용할 수 있도록)
+            os.environ["OPENAI_API_KEY"] = api_key
+
             client = MultiServerMCPClient(mcp_config)
             # 새로운 API 사용: context manager 대신 직접 get_tools 호출
             tools = await client.get_tools()
@@ -422,6 +433,7 @@ async def initialize_session(mcp_config=None):
                 model=selected_model,
                 temperature=0.1,
                 max_tokens=OUTPUT_TOKEN_INFO[selected_model]["max_tokens"],
+                api_key=api_key,  # 명시적으로 API 키 전달
             )
             agent = create_react_agent(
                 model,
@@ -441,18 +453,57 @@ async def initialize_session(mcp_config=None):
 with model_container:
     st.subheader("🤖 AI 모델 설정")
 
-    # OpenAI API 키 확인
-    has_openai_key = os.environ.get("OPENAI_API_KEY") is not None
+    # API 키 입력 섹션
+    st.markdown("### 🔑 OpenAI API 키 설정")
+
+    # 세션 상태에 API 키 저장
+    if "openai_api_key" not in st.session_state:
+        # 처음에는 빈 문자열로 초기화
+        st.session_state.openai_api_key = ""
+
+    # API 키 입력 필드 (항상 빈칸으로 시작)
+    api_key_input = st.text_input(
+        "OpenAI API 키",
+        value="",  # 항상 빈칸으로 시작
+        type="password",
+        help="OpenAI API 키를 입력하세요. sk-로 시작하는 키입니다.",
+        placeholder="sk-proj-...",
+    )
+
+    # API 키 적용 버튼
+    col1, col2 = st.columns([3, 1])
+    with col2:
+        if st.button("🔑 API 키 적용", key="apply_api_key", use_container_width=True):
+            if api_key_input.strip():
+                # 세션 상태와 환경변수에 저장
+                st.session_state.openai_api_key = api_key_input.strip()
+                os.environ["OPENAI_API_KEY"] = api_key_input.strip()
+                st.success("✅ API 키가 적용되었습니다.")
+                st.rerun()
+            else:
+                st.error("❌ API 키를 입력해주세요.")
+
+    # API 키 상태 확인
+    has_openai_key = bool(st.session_state.openai_api_key)
     if has_openai_key:
         available_models = ["gpt-4o", "gpt-4o-mini"]
-        st.success("✅ OpenAI API 키가 설정되어 있습니다.")
-    else:
-        st.warning(
-            "⚠️ API 키가 설정되지 않았습니다. .env 파일에 OPENAI_API_KEY를 추가해주세요."
+        # API 키 마스킹해서 표시
+        masked_key = (
+            st.session_state.openai_api_key[:7]
+            + "..."
+            + st.session_state.openai_api_key[-4:]
+            if len(st.session_state.openai_api_key) > 11
+            else "설정됨"
         )
-        available_models = ["gpt-4o"]
+        st.success(f"✅ OpenAI API 키가 설정되어 있습니다. ({masked_key})")
+    else:
+        st.warning("⚠️ OpenAI API 키를 입력해주세요.")
+        available_models = ["gpt-4o", "gpt-4o-mini"]  # API 키 없어도 선택은 가능하게
+
+    st.divider()
 
     # 모델 선택 드롭다운
+    st.markdown("### 🧠 모델 선택")
     previous_model = st.session_state.selected_model
     st.session_state.selected_model = st.selectbox(
         "사용할 모델 선택",
@@ -462,7 +513,8 @@ with model_container:
             if st.session_state.selected_model in available_models
             else 0
         ),
-        help="OpenAI 모델은 OPENAI_API_KEY가 환경변수로 설정되어야 합니다.",
+        help="OpenAI 모델을 선택하세요. API 키가 필요합니다.",
+        disabled=not has_openai_key,
     )
 
     # 모델이 변경되었을 때 세션 초기화 필요 알림
@@ -760,8 +812,13 @@ with chat_container:
     col1, col2 = st.columns([3, 1])
 
     with col1:
-        # --- 기본 세션 초기화 (초기화되지 않은 경우) ---
-        if not st.session_state.session_initialized:
+        # --- API 키 및 세션 상태 확인 ---
+        api_key = st.session_state.get("openai_api_key", "")
+        if not api_key:
+            st.warning(
+                "⚠️ OpenAI API 키가 설정되지 않았습니다. '모델 설정' 탭에서 API 키를 입력해주세요."
+            )
+        elif not st.session_state.session_initialized:
             st.info(
                 "MCP 서버와 에이전트가 초기화되지 않았습니다. 'MCP 도구' 탭에서 '설정 적용하기' 버튼을 클릭하여 초기화해주세요."
             )
@@ -788,7 +845,13 @@ with chat_container:
 # --- 화면 하단 고정: 사용자 입력 및 처리 ---
 user_query = st.chat_input("💬 질문을 입력하세요")
 if user_query:
-    if st.session_state.session_initialized:
+    # API 키 확인
+    api_key = st.session_state.get("openai_api_key", "")
+    if not api_key:
+        st.warning(
+            "⚠️ OpenAI API 키가 설정되지 않았습니다. '모델 설정' 탭에서 API 키를 입력해주세요."
+        )
+    elif st.session_state.session_initialized:
         # 챗봇 탭이 활성화되어 있을 때만 채팅 메시지 표시
         with chat_container:
             st.chat_message("user", avatar="🧑‍💻").markdown(user_query)
@@ -819,5 +882,5 @@ if user_query:
                 st.rerun()
     else:
         st.warning(
-            "⚠️ MCP 서버와 에이전트가 초기화되지 않았습니다. '설정' 탭에서 '설정 적용하기' 버튼을 클릭하여 초기화해주세요."
+            "⚠️ MCP 서버와 에이전트가 초기화되지 않았습니다. 'MCP 도구' 탭에서 '설정 적용하기' 버튼을 클릭하여 초기화해주세요."
         )
