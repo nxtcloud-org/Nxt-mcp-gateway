@@ -120,7 +120,12 @@ class OpenAIProvider(ModelProvider):
 
     def validate_credentials(self, api_key: str) -> bool:
         """Validate OpenAI API key format"""
-        return api_key and api_key.startswith("sk-") and len(api_key) > 20
+        if not api_key:
+            return False
+
+        # OpenAI keys start with sk- and are typically 51+ characters
+        # But we'll be more permissive for different key formats
+        return api_key.startswith("sk-") and len(api_key) >= 20
 
     def get_provider_name(self) -> str:
         return "OpenAI"
@@ -214,12 +219,13 @@ class BedrockProvider(ModelProvider):
 
     def validate_credentials(self, api_key: str) -> bool:
         """Validate AWS Bedrock API key format"""
-        if not api_key or len(api_key) < 20:
+        if not api_key or len(api_key) < 10:
             return False
 
-        # Basic format validation for Bedrock API keys
-        cleaned_key = api_key.replace("-", "").replace("_", "")
-        return cleaned_key.isalnum()
+        # AWS Bedrock API keys can have various formats
+        # For now, we'll be more permissive and just check basic length and characters
+        # Real validation happens when creating the client
+        return len(api_key) >= 10 and len(api_key) <= 200
 
     def get_provider_name(self) -> str:
         return "AWS Bedrock"
@@ -232,23 +238,6 @@ MODEL_REGISTRY = {
         "display_name": "OpenAI",
         "description": "OpenAI's GPT models with advanced reasoning capabilities",
         "models": {
-            "gpt-4o": ModelConfig(
-                display_name="OpenAI GPT-4o",
-                model_identifier="gpt-4o",
-                max_tokens=16000,
-                temperature_range=(0.0, 2.0),
-                supports_streaming=True,
-                description="최신 멀티모달 모델로 텍스트, 이미지, 오디오 처리 가능",
-                pricing_tier="Premium",
-                capabilities=[
-                    "text",
-                    "code",
-                    "reasoning",
-                    "multimodal",
-                    "function_calling",
-                ],
-                context_window=128000,
-            ),
             "gpt-4o-mini": ModelConfig(
                 display_name="OpenAI GPT-4o Mini",
                 model_identifier="gpt-4o-mini",
@@ -256,9 +245,6 @@ MODEL_REGISTRY = {
                 temperature_range=(0.0, 2.0),
                 supports_streaming=True,
                 description="빠르고 효율적인 경량 모델",
-                pricing_tier="Standard",
-                capabilities=["text", "code", "reasoning", "function_calling"],
-                context_window=128000,
             ),
         },
     },
@@ -274,9 +260,6 @@ MODEL_REGISTRY = {
                 temperature_range=(0.0, 1.0),
                 supports_streaming=True,
                 description="Anthropic의 빠르고 효율적인 Claude 모델",
-                pricing_tier="Standard",
-                capabilities=["text", "code", "reasoning", "analysis"],
-                context_window=200000,
                 additional_params={"region": "us-east-1"},
             )
         },

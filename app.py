@@ -172,7 +172,7 @@ if "session_initialized" not in st.session_state:
     st.session_state.history = []  # 대화 기록 저장 리스트
     st.session_state.mcp_client = None  # MCP 클라이언트 객체 저장 공간
     st.session_state.selected_model = (
-        "openai:gpt-4o"  # 기본 모델 선택 (provider:model 형식)
+        "openai:gpt-4o-mini"  # 기본 모델 선택 (provider:model 형식)
     )
     st.session_state.model_manager = ModelManager()  # 모델 매니저 인스턴스
 
@@ -509,58 +509,19 @@ async def initialize_session(mcp_config=None):
 with model_container:
     st.subheader("🤖 AI 모델 설정")
 
+    # 안내문 추가
+    st.info(
+        "💡 **안내:** 아래 두 제공자 중 하나만 설정해도 사용할 수 있습니다. 둘 다 설정하면 모델을 자유롭게 전환할 수 있습니다."
+    )
+
     # 세션 상태 초기화
     if "openai_api_key" not in st.session_state:
         st.session_state.openai_api_key = ""
     if "bedrock_api_key" not in st.session_state:
         st.session_state.bedrock_api_key = ""
 
-    # OpenAI API 키 설정 섹션
-    st.markdown("### 🔑 OpenAI API 키 설정")
-
-    openai_api_key_input = st.text_input(
-        "OpenAI API 키",
-        value="",
-        type="password",
-        help="OpenAI API 키를 입력하세요. sk-로 시작하는 키입니다.",
-        placeholder="sk-proj-...",
-        key="openai_api_key_input",
-    )
-
-    col1, col2 = st.columns([3, 1])
-    with col2:
-        if st.button(
-            "🔑 OpenAI 키 적용", key="apply_openai_key", use_container_width=True
-        ):
-            if openai_api_key_input.strip():
-                if st.session_state.model_manager.register_provider(
-                    "openai", openai_api_key_input.strip()
-                ):
-                    st.session_state.openai_api_key = openai_api_key_input.strip()
-                    st.success("✅ OpenAI API 키가 적용되었습니다.")
-                    st.rerun()
-                else:
-                    st.error("❌ 유효하지 않은 OpenAI API 키입니다.")
-            else:
-                st.error("❌ API 키를 입력해주세요.")
-
-    # OpenAI 상태 표시
-    if st.session_state.model_manager.is_provider_registered("openai"):
-        masked_key = (
-            st.session_state.openai_api_key[:7]
-            + "..."
-            + st.session_state.openai_api_key[-4:]
-            if len(st.session_state.openai_api_key) > 11
-            else "설정됨"
-        )
-        st.success(f"✅ OpenAI API 키가 설정되어 있습니다. ({masked_key})")
-    else:
-        st.warning("⚠️ OpenAI API 키를 입력해주세요.")
-
-    st.divider()
-
-    # AWS Bedrock API 키 설정 섹션
-    st.markdown("### 🔑 AWS Bedrock API 키 설정")
+    # AWS Bedrock API 키 설정 섹션 (위로 이동)
+    st.markdown("### ☁️ AWS Bedrock API 키 설정")
 
     bedrock_api_key_input = st.text_input(
         "AWS Bedrock API 키",
@@ -574,7 +535,7 @@ with model_container:
     col1, col2 = st.columns([3, 1])
     with col2:
         if st.button(
-            "🔑 Bedrock 키 적용", key="apply_bedrock_key", use_container_width=True
+            "☁️ Bedrock 키 적용", key="apply_bedrock_key", use_container_width=True
         ):
             if bedrock_api_key_input.strip():
                 if st.session_state.model_manager.register_provider(
@@ -601,6 +562,50 @@ with model_container:
         st.info("🌍 Cross Region Inference 활성화 (us-east-1 리전)")
     else:
         st.warning("⚠️ AWS Bedrock API 키를 입력해주세요.")
+
+    st.divider()
+
+    # OpenAI API 키 설정 섹션 (아래로 이동)
+    st.markdown("### 🤖 OpenAI API 키 설정")
+
+    openai_api_key_input = st.text_input(
+        "OpenAI API 키",
+        value="",
+        type="password",
+        help="OpenAI API 키를 입력하세요. sk-로 시작하는 키입니다.",
+        placeholder="sk-proj-...",
+        key="openai_api_key_input",
+    )
+
+    col1, col2 = st.columns([3, 1])
+    with col2:
+        if st.button(
+            "🤖 OpenAI 키 적용", key="apply_openai_key", use_container_width=True
+        ):
+            if openai_api_key_input.strip():
+                if st.session_state.model_manager.register_provider(
+                    "openai", openai_api_key_input.strip()
+                ):
+                    st.session_state.openai_api_key = openai_api_key_input.strip()
+                    st.success("✅ OpenAI API 키가 적용되었습니다.")
+                    st.rerun()
+                else:
+                    st.error("❌ 유효하지 않은 OpenAI API 키입니다.")
+            else:
+                st.error("❌ API 키를 입력해주세요.")
+
+    # OpenAI 상태 표시
+    if st.session_state.model_manager.is_provider_registered("openai"):
+        masked_key = (
+            st.session_state.openai_api_key[:7]
+            + "..."
+            + st.session_state.openai_api_key[-4:]
+            if len(st.session_state.openai_api_key) > 11
+            else "설정됨"
+        )
+        st.success(f"✅ OpenAI API 키가 설정되어 있습니다. ({masked_key})")
+    else:
+        st.warning("⚠️ OpenAI API 키를 입력해주세요.")
 
     st.divider()
 
@@ -662,43 +667,10 @@ with model_container:
                 provider_name
             )
 
-            col1, col2 = st.columns([2, 1])
-            with col1:
-                st.write(f"🧠 **선택된 모델:** {model_config.display_name}")
-                st.write(f"🏢 **제공자:** {provider_info['display_name']}")
-                if model_config.description:
-                    st.info(f"📝 {model_config.description}")
-
-            with col2:
-                st.metric("최대 토큰", f"{model_config.max_tokens:,}")
-                st.metric("컨텍스트 윈도우", f"{model_config.context_window:,}")
-
-            # 모델 기능 표시
-            if model_config.capabilities:
-                st.write("**🎯 지원 기능:**")
-                capability_badges = []
-                for cap in model_config.capabilities:
-                    if cap == "text":
-                        capability_badges.append("📝 텍스트")
-                    elif cap == "code":
-                        capability_badges.append("💻 코드")
-                    elif cap == "reasoning":
-                        capability_badges.append("🧠 추론")
-                    elif cap == "multimodal":
-                        capability_badges.append("🎨 멀티모달")
-                    elif cap == "function_calling":
-                        capability_badges.append("🔧 함수 호출")
-                    elif cap == "analysis":
-                        capability_badges.append("📊 분석")
-                    else:
-                        capability_badges.append(f"✨ {cap}")
-
-                st.write(" • ".join(capability_badges))
-
-            # 가격 등급 표시
-            if model_config.pricing_tier:
-                tier_color = "🟢" if model_config.pricing_tier == "Standard" else "🟡"
-                st.write(f"**💰 가격 등급:** {tier_color} {model_config.pricing_tier}")
+            st.write(f"🧠 **선택된 모델:** {model_config.display_name}")
+            st.write(f"🏢 **제공자:** {provider_info['display_name']}")
+            if model_config.description:
+                st.info(f"📝 {model_config.description}")
     else:
         st.warning("⚠️ 사용 가능한 모델이 없습니다. 위에서 API 키를 설정해주세요.")
 
@@ -989,11 +961,12 @@ with chat_container:
     col1, col2 = st.columns([3, 1])
 
     with col1:
-        # --- API 키 및 세션 상태 확인 ---
-        api_key = st.session_state.get("openai_api_key", "")
-        if not api_key:
+        # --- 제공자 및 세션 상태 확인 ---
+        available_models = st.session_state.model_manager.get_available_models()
+
+        if not available_models:
             st.warning(
-                "⚠️ OpenAI API 키가 설정되지 않았습니다. '모델 설정' 탭에서 API 키를 입력해주세요."
+                "⚠️ 사용 가능한 모델이 없습니다. '모델 설정' 탭에서 API 키를 설정해주세요."
             )
         elif not st.session_state.session_initialized:
             st.info(
@@ -1022,11 +995,11 @@ with chat_container:
 # --- 화면 하단 고정: 사용자 입력 및 처리 ---
 user_query = st.chat_input("💬 질문을 입력하세요")
 if user_query:
-    # API 키 확인
-    api_key = st.session_state.get("openai_api_key", "")
-    if not api_key:
+    # 사용 가능한 모델 확인
+    available_models = st.session_state.model_manager.get_available_models()
+    if not available_models:
         st.warning(
-            "⚠️ OpenAI API 키가 설정되지 않았습니다. '모델 설정' 탭에서 API 키를 입력해주세요."
+            "⚠️ 사용 가능한 모델이 없습니다. '모델 설정' 탭에서 API 키를 설정해주세요."
         )
     elif st.session_state.session_initialized:
         # 챗봇 탭이 활성화되어 있을 때만 채팅 메시지 표시
