@@ -515,7 +515,7 @@ with model_container:
     if "bedrock_api_key" not in st.session_state:
         st.session_state.bedrock_api_key = ""
 
-    # AWS Bedrock API 키 설정 섹션 (위로 이동)
+    # AWS Bedrock API 키 설정 섹션
     st.markdown("### ☁️ AWS Bedrock API 키 설정")
 
     bedrock_api_key_input = st.text_input(
