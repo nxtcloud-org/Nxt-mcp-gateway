@@ -45,6 +45,11 @@ Thumbs.db
 # Docker
 Dockerfile
 .dockerignore
+build.sh
+push-to-dockerhub.sh
+
+# CI/CD
+.github/
 
 # Documentation
 README.md

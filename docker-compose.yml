@@ -7,8 +7,11 @@ services:
       - "8501:8501"
     environment:
       - PYTHONUNBUFFERED=1
+      # MCP 설정 파일 경로 지정 (선택사항, 기본값: /app/mcp_config.json)
+      # - MCP_CONFIG_PATH=/app/config/mcp_config.json
     volumes:
-      # MCP 설정 파일을 호스트에서 관리하고 싶은 경우
+      # MCP 설정 파일을 호스트에서 관리 (영구 저장)
+      # 볼륨 마운트를 제거하면 컨테이너 내부에만 저장되어 컨테이너 삭제 시 사라집니다
       - ./mcp_config.json:/app/mcp_config.json
     restart: unless-stopped
     healthcheck:

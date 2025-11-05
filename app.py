@@ -28,7 +28,8 @@ from langchain_core.runnables import RunnableConfig
 from model_providers import ModelManager, ModelProviderError
 
 # MCP 설정 파일 경로 설정
-CONFIG_FILE_PATH = "mcp_config.json"
+# 환경 변수 MCP_CONFIG_PATH로 경로 지정 가능, 없으면 기본값 사용
+CONFIG_FILE_PATH = os.getenv("MCP_CONFIG_PATH", "mcp_config.json")
 
 
 # JSON 설정 파일 로드 함수
@@ -428,10 +429,29 @@ async def initialize_session(mcp_config=None):
 
             # 2. MCP 클라이언트 초기화
             st.info("🔗 MCP 서버에 연결 중...")
-            client = MultiServerMCPClient(mcp_config)
-            tools = await client.get_tools()
-            st.session_state.tool_count = len(tools)
-            st.session_state.mcp_client = client
+            try:
+                # 디버깅: 설정 내용 로깅
+                import traceback
+
+                st.write(f"🔍 디버깅: MCP 설정 서버 수 = {len(mcp_config)}")
+                for server_name, server_config in mcp_config.items():
+                    st.write(
+                        f"  - {server_name}: {server_config.get('command', 'N/A')} {' '.join(server_config.get('args', [])[:2])}"
+                    )
+
+                client = MultiServerMCPClient(mcp_config)
+                tools = await client.get_tools()
+                st.session_state.tool_count = len(tools)
+                st.session_state.mcp_client = client
+                st.success(f"✅ {len(tools)}개의 MCP 도구를 로드했습니다.")
+            except Exception as e:
+                error_detail = traceback.format_exc()
+                st.error(f"❌ MCP 클라이언트 초기화 실패: {str(e)}")
+                st.error(f"상세 에러:\n```\n{error_detail}\n```")
+                st.error(
+                    f"설정 내용:\n```json\n{json.dumps(mcp_config, indent=2, ensure_ascii=False)}\n```"
+                )
+                return False
 
             # 3. 모델 인스턴스 생성
             st.info(f"🤖 {selected_model_key} 모델 초기화 중...")
@@ -496,7 +516,19 @@ async def initialize_session(mcp_config=None):
                 return False
 
         except Exception as e:
+            import traceback
+
+            error_detail = traceback.format_exc()
             st.error(f"❌ 초기화 중 예상치 못한 오류 발생: {str(e)}")
+            st.error(f"상세 에러:\n```\n{error_detail}\n```")
+            # 세션 상태에 에러 정보 저장 (rerun 후에도 유지)
+            import time
+
+            st.session_state.last_init_error = {
+                "message": str(e),
+                "traceback": error_detail,
+                "timestamp": time.time(),
+            }
             return False
 
 
@@ -728,13 +760,40 @@ with mcp_container:
                 # 도구 추가 expander 접기
                 if "mcp_tools_expander" in st.session_state:
                     st.session_state.mcp_tools_expander = False
+                # 이전 에러 정보 초기화
+                if "last_init_error" in st.session_state:
+                    del st.session_state.last_init_error
             else:
                 st.error("❌ 설정 적용에 실패하였습니다.")
+                # 에러 정보가 세션 상태에 저장되었는지 확인
+                if "last_init_error" in st.session_state:
+                    error_info = st.session_state.last_init_error
+                    st.error(
+                        f"에러 상세: {error_info.get('message', '알 수 없는 오류')}"
+                    )
+                    with st.expander("🔍 상세 에러 정보", expanded=False):
+                        st.code(error_info.get("traceback", ""))
 
-        # 페이지 새로고침
-        st.rerun()
+        # 페이지 새로고침 (에러가 있으면 에러 메시지 유지를 위해 조건부)
+        if success:
+            st.rerun()
+        else:
+            # 에러가 있으면 rerun하지 않고 상태 유지
+            st.warning("⚠️ 설정 적용에 실패했습니다. 위의 에러 메시지를 확인하세요.")
 
     st.divider()
+
+    # 이전 초기화 에러 정보 표시
+    if "last_init_error" in st.session_state:
+        error_info = st.session_state.last_init_error
+        st.error("⚠️ **이전 초기화 중 에러가 발생했습니다**")
+        st.error(f"에러: {error_info.get('message', '알 수 없는 오류')}")
+        with st.expander("🔍 상세 에러 정보 보기", expanded=False):
+            st.code(error_info.get("traceback", ""))
+        if st.button("🔄 에러 정보 초기화", key="clear_error_info"):
+            del st.session_state.last_init_error
+            st.rerun()
+        st.divider()
 
     # MCP 도구 수 정보 표시
     col1, col2 = st.columns([1, 1])

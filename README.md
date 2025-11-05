@@ -149,15 +149,29 @@ docker build -t glen15/nxt-mcp-gateway:latest .
 ### 실행 옵션
 
 ```bash
-# 기본 실행
+# 기본 실행 (설정은 컨테이너 내부에만 저장, 컨테이너 삭제 시 사라짐)
 docker run -p 8501:8501 glen15/nxt-mcp-gateway:latest
 
 # 백그라운드 실행
 docker run -d -p 8501:8501 --name nxt-mcp-gateway glen15/nxt-mcp-gateway:latest
 
-# MCP 설정 파일 마운트
+# MCP 설정 파일 마운트 (권장: 설정이 호스트에 영구 저장됨)
 docker run -p 8501:8501 -v $(pwd)/mcp_config.json:/app/mcp_config.json glen15/nxt-mcp-gateway:latest
+
+# 환경 변수로 설정 파일 경로 지정
+docker run -p 8501:8501 \
+  -v $(pwd)/config:/app/config \
+  -e MCP_CONFIG_PATH=/app/config/mcp_config.json \
+  glen15/nxt-mcp-gateway:latest
 ```
+
+⚠️ **중요**: Docker 실행 시 설정 파일을 볼륨으로 마운트하지 않으면:
+
+- UI에서 변경한 MCP 서버 설정이 컨테이너 내부 파일에만 저장됩니다
+- 컨테이너를 삭제하면 설정이 사라집니다
+- 여러 컨테이너 인스턴스 간 설정이 공유되지 않습니다
+
+✅ **권장**: 위의 볼륨 마운트 예제처럼 설정 파일을 마운트하여 사용하세요.
 
 ### Docker Hub 배포
 
@@ -190,14 +204,6 @@ docker push glen15/nxt-mcp-gateway:latest
 1. `model_providers.py`에서 `ModelProvider` 클래스 상속
 2. `MODEL_REGISTRY`에 새 제공자 등록
 3. UI에서 자동으로 사용 가능
-
-## 🤝 기여
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
 
 ## 📄 라이선스
 
