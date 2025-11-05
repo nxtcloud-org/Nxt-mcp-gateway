@@ -21,7 +21,7 @@ from langgraph.prebuilt import create_react_agent
 from langchain_core.messages import HumanMessage
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from utils import astream_graph, random_uuid
-from langchain_core.messages.ai import AIMessageChunk
+from langchain_core.messages.ai import AIMessageChunk, AIMessage
 from langchain_core.messages.tool import ToolMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.runnables import RunnableConfig
@@ -45,11 +45,6 @@ def load_config_from_json():
         "get_current_time": {
             "command": "python",
             "args": ["./mcp_servers/time.py"],
-            "transport": "stdio",
-        },
-        "fitness_calculator": {
-            "command": "python",
-            "args": ["./mcp_servers/fitness.py"],
             "transport": "stdio",
         },
     }
@@ -103,56 +98,123 @@ chat_container = tab1
 model_container = tab2
 mcp_container = tab3
 
-SYSTEM_PROMPT = """<ROLE>
-You are a smart agent with an ability to use tools. 
-You will be given a question and you will use the tools to answer the question.
-Pick the most relevant tool to answer the question. 
-If you are failed to answer the question, try different tools to get context.
-Your answer should be helpful and appropriate to the context.
+
+def get_system_prompt():
+    """
+    시스템 프롬프트를 동적으로 생성합니다.
+    경로 관련 문제를 유연하게 처리하도록 안내합니다.
+    """
+    return """<ROLE>
+You are a helpful AI assistant with access to tools. You can engage in natural conversation and use tools only when necessary to answer specific questions or perform tasks that require them.
 </ROLE>
 
 ----
 
+<TOOL_USAGE_GUIDELINES>
+**IMPORTANT: Use tools ONLY when necessary**
+
+DO NOT use tools for:
+- Simple greetings (안녕, hello, hi, etc.)
+- Casual conversation (How are you?, What's up?, etc.)
+- Questions you can answer from your knowledge
+- General questions that don't require specific data or actions
+
+USE tools ONLY when:
+- User explicitly asks for specific information that requires tools (e.g., "What time is it?", "Calculate my BMI", etc.)
+- User requests to perform an action that requires a tool
+- User asks a question that cannot be answered without accessing external data or performing a computation
+- The question clearly requires real-time data, calculations, or specific tool functionality
+
+**General conversation should be handled naturally without tool calls.**
+</TOOL_USAGE_GUIDELINES>
+
+----
+
+<PATH_HANDLING_GUIDELINES>
+**IMPORTANT: For file system operations (e.g., Desktop Commander):**
+
+1. **DO NOT use generic or hardcoded paths** like:
+   - "/Users/username" or "/Users/$USER"
+   - Any specific user's path that might not exist on the current system
+
+2. **Path discovery strategy:**
+   - If the tool provides a way to list available directories or get system information, use that first
+   - Check the tool's documentation or available functions to discover the correct paths
+   - If you encounter a path error, the error message will typically list the allowed directories - use those exact paths
+
+3. **Error handling:**
+   - When a path error occurs, carefully read the error message
+   - The error message will show which directories are allowed (e.g., "Must be within one of these directories: /Users/glen/Desktop")
+   - Use the exact paths from the error message for retry
+   - Explain to the user what paths are available and use those paths
+
+4. **Best practices:**
+   - Let the tool itself determine the available paths through its error messages or documentation
+   - Never assume paths - always verify through tool responses
+   - Adapt dynamically based on the system's actual configuration
+</PATH_HANDLING_GUIDELINES>
+
+----
+
 <INSTRUCTIONS>
-Step 1: Analyze the question
-- Analyze user's question and final goal.
-- If the user's question is consist of multiple sub-questions, split them into smaller sub-questions.
+Step 1: Analyze the user's message
+- Determine if this is a simple greeting, casual conversation, or a question requiring tools
+- For greetings and casual conversation, respond naturally without using tools
+- For questions requiring specific information or actions, proceed to Step 2
 
-Step 2: Pick the most relevant tool
-- Pick the most relevant tool to answer the question.
-- If you are failed to answer the question, try different tools to get context.
+Step 2: Determine if tools are needed
+- Only proceed if the user's question clearly requires tool usage
+- If the question can be answered from your knowledge, answer directly without tools
+- If tools are needed, identify the most relevant tool
 
-Step 3: Answer the question
-- Answer the question in the same language as the question.
-- Use the tool's output as the primary source of information.
-- If the tool provides rich formatting (emojis, markdown, personality), preserve and use it in your response.
-- For simple data tools, you may summarize or present the information clearly.
-- For personality-rich tools (like fitness calculator), include the full formatted output to preserve the experience.
+Step 3: Use tools (if necessary)
+- Use the most relevant tool to answer the question
+- **For file system operations:**
+  - DO NOT use hardcoded or generic user paths
+  - If the tool provides directory listing or system info capabilities, use those first
+  - If you get a path error, extract the allowed directories from the error message and use those exact paths
+  - Adapt dynamically based on the tool's responses and error messages
+- If the first tool doesn't provide the answer, try different tools
+- Use the tool's output as the primary source of information
 
-Step 4: Provide the source of the answer(if applicable)
-- If you've used the tool, provide the source of the answer.
-- Valid sources are either a website(URL) or a document(PDF, etc).
+Step 4: Answer the question
+- Answer in the same language as the question
+- For tool outputs: Preserve formatting, emojis, and personality when the tool provides them
+- For simple data tools: Summarize or present information clearly
+- For personality-rich tools: Include the full formatted output to preserve the experience
+- For natural conversation: Respond naturally and helpfully
+- **If a tool error occurs related to paths:**
+  - Explain the issue clearly to the user
+  - Extract allowed paths from the error message
+  - Retry with the correct paths from the error message
+  - Guide the user on what paths are available
 
 Guidelines:
-- The tool's output is more important than your own knowledge.
-- Preserve formatting, emojis, and personality when the tool provides them.
-- For technical/data tools, present information clearly and professionally.
-- For entertainment/personality tools, maintain their character and style.
-- Answer in the same language as the question.
-- Be helpful and contextually appropriate.
+- Prioritize natural conversation over tool usage
+- Use your knowledge for general questions and conversation
+- Only use tools when they are clearly necessary
+- **Never assume paths - always discover them through tool responses or error messages**
+- Adapt dynamically to the actual system configuration
+- Preserve formatting, emojis, and personality when tools provide them
+- Answer in the same language as the question
+- Be helpful and contextually appropriate
 </INSTRUCTIONS>
 
 ----
 
 <OUTPUT_FORMAT>
-(Appropriate response based on tool output - preserve personality for character tools, be clear for data tools)
+For natural conversation: Respond naturally without tool calls
+For tool-assisted answers: (Appropriate response based on tool output)
 
-**Source**(if applicable)
+**Source**(if applicable and tool was used)
 - (source1: valid URL)
 - (source2: valid URL)
 - ...
 </OUTPUT_FORMAT>
 """
+
+
+SYSTEM_PROMPT = get_system_prompt()
 
 # OUTPUT_TOKEN_INFO는 이제 ModelManager에서 관리되므로 제거
 # 모델별 토큰 정보는 model_providers.py의 ModelConfig에서 관리됨
@@ -333,6 +395,88 @@ def get_streaming_callback(text_placeholder, tool_placeholder):
     return callback_func, accumulated_text, accumulated_tool
 
 
+async def cleanup_incomplete_tool_calls(agent, thread_id):
+    """
+    체크포인터에서 불러온 히스토리에서 불완전한 tool_calls를 정리합니다.
+
+    tool_calls가 있는 AIMessage가 있지만 대응하는 ToolMessage가 없는 경우,
+    해당 tool_calls를 제거하여 메시지 히스토리를 정리합니다.
+    """
+    try:
+        # 체크포인터에서 현재 히스토리 불러오기
+        config = RunnableConfig(thread_id=thread_id)
+
+        # LangGraph의 get_state 메서드를 통해 상태 가져오기
+        # CompiledGraph는 get_state 메서드를 가지고 있음
+        if hasattr(agent, "get_state"):
+            checkpoint = await agent.get_state(config)
+
+            if checkpoint and hasattr(checkpoint, "values") and checkpoint.values:
+                messages = checkpoint.values.get("messages", [])
+
+                if not messages:
+                    return
+
+                # 모든 ToolMessage의 tool_call_id 수집
+                tool_message_ids = set()
+                for msg in messages:
+                    if isinstance(msg, ToolMessage):
+                        tool_message_ids.add(msg.tool_call_id)
+
+                # tool_calls가 있는 AIMessage 찾아서 정리
+                cleaned_messages = []
+                needs_update = False
+
+                for msg in messages:
+                    if (
+                        isinstance(msg, AIMessage)
+                        and hasattr(msg, "tool_calls")
+                        and msg.tool_calls
+                    ):
+                        # 대응하는 ToolMessage가 없는 tool_calls 필터링
+                        valid_tool_calls = []
+                        for tc in msg.tool_calls:
+                            tool_call_id = (
+                                tc.get("id")
+                                if isinstance(tc, dict)
+                                else getattr(tc, "id", None)
+                            )
+                            if tool_call_id and tool_call_id in tool_message_ids:
+                                valid_tool_calls.append(tc)
+
+                        if len(valid_tool_calls) < len(msg.tool_calls):
+                            needs_update = True
+                            if valid_tool_calls:
+                                # 일부 tool_calls만 유효한 경우
+                                cleaned_msg = AIMessage(
+                                    content=msg.content,
+                                    tool_calls=valid_tool_calls,
+                                    id=getattr(msg, "id", None),
+                                )
+                            else:
+                                # 모든 tool_calls가 유효하지 않은 경우, tool_calls 제거
+                                cleaned_msg = AIMessage(
+                                    content=msg.content,
+                                    id=getattr(msg, "id", None),
+                                )
+                            cleaned_messages.append(cleaned_msg)
+                        else:
+                            cleaned_messages.append(msg)
+                    else:
+                        cleaned_messages.append(msg)
+
+                # 정리된 메시지로 체크포인트 업데이트
+                if needs_update and hasattr(agent, "update_state"):
+                    await agent.update_state(config, {"messages": cleaned_messages})
+    except Exception as e:
+        # 에러가 발생해도 계속 진행 (히스토리 정리 실패는 치명적이지 않음)
+        # 새로운 thread_id를 사용하거나 다른 방법으로 처리 가능
+        import traceback
+
+        print(f"Warning: Failed to cleanup incomplete tool calls: {e}")
+        print(traceback.format_exc())
+
+
 async def process_query(query, text_placeholder, tool_placeholder, timeout_seconds=60):
     """
     사용자 질문을 처리하고 응답을 생성합니다.
@@ -353,6 +497,11 @@ async def process_query(query, text_placeholder, tool_placeholder, timeout_secon
     """
     try:
         if st.session_state.agent:
+            # 불완전한 tool_calls 정리 (히스토리 검증)
+            await cleanup_incomplete_tool_calls(
+                st.session_state.agent, st.session_state.thread_id
+            )
+
             streaming_callback, accumulated_text_obj, accumulated_tool_obj = (
                 get_streaming_callback(text_placeholder, tool_placeholder)
             )
@@ -592,47 +741,46 @@ with model_container:
 
     st.divider()
 
-    # OpenAI API 키 설정 섹션 (아래로 이동)
-    st.markdown("### 🤖 OpenAI API 키 설정")
-
-    openai_api_key_input = st.text_input(
-        "OpenAI API 키",
-        value="",
-        type="password",
-        help="OpenAI API 키를 입력하세요. sk-로 시작하는 키입니다.",
-        placeholder="sk-proj-...",
-        key="openai_api_key_input",
-    )
-
-    col1, col2 = st.columns([3, 1])
-    with col2:
-        if st.button(
-            "🤖 OpenAI 키 적용", key="apply_openai_key", use_container_width=True
-        ):
-            if openai_api_key_input.strip():
-                if st.session_state.model_manager.register_provider(
-                    "openai", openai_api_key_input.strip()
-                ):
-                    st.session_state.openai_api_key = openai_api_key_input.strip()
-                    st.success("✅ OpenAI API 키가 적용되었습니다.")
-                    st.rerun()
-                else:
-                    st.error("❌ 유효하지 않은 OpenAI API 키입니다.")
-            else:
-                st.error("❌ API 키를 입력해주세요.")
-
-    # OpenAI 상태 표시
-    if st.session_state.model_manager.is_provider_registered("openai"):
-        masked_key = (
-            st.session_state.openai_api_key[:7]
-            + "..."
-            + st.session_state.openai_api_key[-4:]
-            if len(st.session_state.openai_api_key) > 11
-            else "설정됨"
+    # OpenAI API 키 설정 섹션 (expander로 접어둠)
+    with st.expander("🤖 OpenAI API 키 설정", expanded=False):
+        openai_api_key_input = st.text_input(
+            "OpenAI API 키",
+            value="",
+            type="password",
+            help="OpenAI API 키를 입력하세요. sk-로 시작하는 키입니다.",
+            placeholder="sk-proj-...",
+            key="openai_api_key_input",
         )
-        st.success(f"✅ OpenAI API 키가 설정되어 있습니다. ({masked_key})")
-    else:
-        st.warning("⚠️ OpenAI API 키를 입력해주세요.")
+
+        col1, col2 = st.columns([3, 1])
+        with col2:
+            if st.button(
+                "🤖 OpenAI 키 적용", key="apply_openai_key", use_container_width=True
+            ):
+                if openai_api_key_input.strip():
+                    if st.session_state.model_manager.register_provider(
+                        "openai", openai_api_key_input.strip()
+                    ):
+                        st.session_state.openai_api_key = openai_api_key_input.strip()
+                        st.success("✅ OpenAI API 키가 적용되었습니다.")
+                        st.rerun()
+                    else:
+                        st.error("❌ 유효하지 않은 OpenAI API 키입니다.")
+                else:
+                    st.error("❌ API 키를 입력해주세요.")
+
+        # OpenAI 상태 표시
+        if st.session_state.model_manager.is_provider_registered("openai"):
+            masked_key = (
+                st.session_state.openai_api_key[:7]
+                + "..."
+                + st.session_state.openai_api_key[-4:]
+                if len(st.session_state.openai_api_key) > 11
+                else "설정됨"
+            )
+            st.success(f"✅ OpenAI API 키가 설정되어 있습니다. ({masked_key})")
+        else:
+            st.warning("⚠️ OpenAI API 키를 입력해주세요.")
 
     st.divider()
 
@@ -855,8 +1003,16 @@ with mcp_container:
     st.markdown("### ➕ 새 MCP 서버 추가")
     st.markdown("💡 중괄호 숫자를 잘 확인하고 JSON 형식을 체크해주세요")
 
-    # 기본 예시 JSON
-    default_json = {
+    # 예시 JSON 정의
+    fitness_example = {
+        "fitness_calculator": {
+            "command": "python",
+            "args": ["./mcp_servers/fitness.py"],
+            "transport": "stdio",
+        }
+    }
+
+    desktop_commander_example = {
         "desktop-commander": {
             "command": "npx",
             "args": [
@@ -871,13 +1027,26 @@ with mcp_container:
         }
     }
 
-    default_text = json.dumps(default_json, indent=2, ensure_ascii=False)
+    # 예시 섹션
+    with st.expander("📋 예시 JSON 복사하기", expanded=False):
+        st.markdown("**1. 헬스 계산기 (fitness.py)**")
+        st.code(
+            json.dumps(fitness_example, indent=2, ensure_ascii=False),
+            language="json",
+        )
+        st.markdown("**2. Desktop Commander (외부 서버)**")
+        st.code(
+            json.dumps(desktop_commander_example, indent=2, ensure_ascii=False),
+            language="json",
+        )
+        st.caption("💡 위 예시를 복사하여 아래 입력 필드에 붙여넣으세요")
 
     new_tool_json = st.text_area(
         "MCP 서버 설정 (JSON)",
-        default_text,
+        value="{}",
         height=300,
-        help="JSON 형식으로 MCP 서버 설정을 입력하세요",
+        help="JSON 형식으로 MCP 서버 설정을 입력하세요. 위의 예시를 복사하여 사용할 수 있습니다.",
+        key="mcp_server_json_input",
     )
 
     # 추가하기 버튼
@@ -974,7 +1143,7 @@ with mcp_container:
 
     # 기본 서버 복원 버튼
     if st.button(
-        "🔄 기본 서버 복원 (시간, 헬스계산기)",
+        "🔄 기본 서버 복원 (시간)",
         key="restore_default_mcp_tools",
         use_container_width=True,
     ):
@@ -983,11 +1152,6 @@ with mcp_container:
             "get_current_time": {
                 "command": "python",
                 "args": ["./mcp_servers/time.py"],
-                "transport": "stdio",
-            },
-            "fitness_calculator": {
-                "command": "python",
-                "args": ["./mcp_servers/fitness.py"],
                 "transport": "stdio",
             },
         }
