@@ -31,28 +31,89 @@ from model_providers import ModelManager, ModelProviderError
 # 환경 변수 MCP_CONFIG_PATH로 경로 지정 가능, 없으면 기본값 사용
 CONFIG_FILE_PATH = os.getenv("MCP_CONFIG_PATH", "mcp_config.json")
 
+# MCP 도구별 메타데이터 정의
+# container_compatible: 컨테이너 환경에서 사용 가능 여부
+# description: 도구 설명
+MCP_TOOLS_METADATA = {
+    "get_current_time": {
+        "container_compatible": True,
+        "description": "현재 시간 조회",
+        "category": "유틸리티",
+    },
+    "playwright-mcp": {
+        "container_compatible": False,
+        "description": "브라우저 자동화 (Playwright)",
+        "category": "웹 자동화",
+        "note": "컨테이너 환경에서는 브라우저 프로필 충돌로 인해 사용 불가",
+    },
+}
+
 
 # JSON 설정 파일 로드 함수
 def load_config_from_json():
     """
     config.json 파일에서 설정을 로드합니다.
     파일이 없는 경우 기본 설정으로 파일을 생성합니다.
+    로드된 설정에서 transport가 없는 서버에 대해 자동으로 transport를 추가합니다.
 
     반환값:
-        dict: 로드된 설정
+        dict: 로드된 설정 (transport가 자동으로 추가됨)
     """
-    default_config = {
+    # 컨테이너 환경 확인
+    is_container = os.environ.get("IS_CONTAINER", "false").lower() == "true"
+
+    # 기본 설정 정의 (모든 도구)
+    all_default_configs = {
         "get_current_time": {
             "command": "python",
             "args": ["./mcp_servers/time.py"],
             "transport": "stdio",
         },
+        "playwright-mcp": {
+            "command": "npx",
+            "args": [
+                "-y",
+                "@smithery/cli@latest",
+                "run",
+                "@microsoft/playwright-mcp",
+                "--key",
+                "8f1bc671-fe10-43cd-8da1-b76a057f3c0a",
+            ],
+            "transport": "stdio",
+        },
     }
+
+    # 환경에 따라 호환 가능한 도구만 필터링
+    default_config = {}
+    for tool_name, tool_config in all_default_configs.items():
+        metadata = MCP_TOOLS_METADATA.get(tool_name, {})
+        is_compatible = metadata.get("container_compatible", True)
+
+        # 컨테이너 환경이면 호환 가능한 도구만, 아니면 모든 도구 포함
+        if not is_container or is_compatible:
+            default_config[tool_name] = tool_config
 
     try:
         if os.path.exists(CONFIG_FILE_PATH):
             with open(CONFIG_FILE_PATH, "r", encoding="utf-8") as f:
-                return json.load(f)
+                config = json.load(f)
+
+                # 각 서버 설정에 transport가 없으면 자동으로 추가
+                config_updated = False
+                for server_name, server_config in config.items():
+                    if "transport" not in server_config:
+                        # URL이 있으면 sse, 없으면 stdio
+                        if "url" in server_config:
+                            server_config["transport"] = "sse"
+                        else:
+                            server_config["transport"] = "stdio"
+                        config_updated = True
+
+                # 설정이 업데이트되었으면 파일에 저장
+                if config_updated:
+                    save_config_to_json(config)
+
+                return config
         else:
             # 파일이 없는 경우 기본 설정으로 파일 생성
             save_config_to_json(default_config)
@@ -99,19 +160,41 @@ model_container = tab2
 mcp_container = tab3
 
 
-def get_system_prompt():
+def get_system_prompt(available_tools=None):
     """
     시스템 프롬프트를 동적으로 생성합니다.
     경로 관련 문제를 유연하게 처리하도록 안내합니다.
+
+    매개변수:
+        available_tools: 사용 가능한 도구 목록 (선택사항)
     """
-    return """<ROLE>
+    tool_list_section = ""
+    if available_tools:
+        tool_names = [tool.name for tool in available_tools]
+        tool_list_section = f"""
+<AVAILABLE_TOOLS>
+**CRITICAL: You can ONLY use the following tools that are actually available:**
+{', '.join(tool_names)}
+
+**IMPORTANT RULES:**
+- You MUST ONLY use tools that are listed above
+- If a tool is NOT in the list above, you CANNOT use it
+- If the user asks for something that requires a tool NOT in the list, you MUST tell them that the tool is not available
+- DO NOT pretend to have tools that are not in the list
+- DO NOT make up or assume tool functionality
+</AVAILABLE_TOOLS>
+
+----
+"""
+
+    return f"""<ROLE>
 You are a helpful AI assistant with access to tools. You can engage in natural conversation and use tools only when necessary to answer specific questions or perform tasks that require them.
 </ROLE>
 
 ----
-
+{tool_list_section}
 <TOOL_USAGE_GUIDELINES>
-**IMPORTANT: Use tools ONLY when necessary**
+**IMPORTANT: Use tools ONLY when necessary AND when they are actually available**
 
 DO NOT use tools for:
 - Simple greetings (안녕, hello, hi, etc.)
@@ -120,10 +203,17 @@ DO NOT use tools for:
 - General questions that don't require specific data or actions
 
 USE tools ONLY when:
+- The tool is actually available in the system (check AVAILABLE_TOOLS section above)
 - User explicitly asks for specific information that requires tools (e.g., "What time is it?", "Calculate my BMI", etc.)
 - User requests to perform an action that requires a tool
 - User asks a question that cannot be answered without accessing external data or performing a computation
 - The question clearly requires real-time data, calculations, or specific tool functionality
+
+**CRITICAL: If a tool is NOT available:**
+- DO NOT use the tool
+- DO NOT pretend the tool exists
+- Tell the user clearly: "해당 기능을 사용할 수 없습니다. [기능명] 도구가 설정되어 있지 않습니다."
+- Example: If user asks "What time is it?" but no time tool is available, say "현재 시간을 조회할 수 없습니다. 시간 조회 도구가 설정되어 있지 않습니다."
 
 **General conversation should be handled naturally without tool calls.**
 </TOOL_USAGE_GUIDELINES>
@@ -164,8 +254,10 @@ Step 1: Analyze the user's message
 
 Step 2: Determine if tools are needed
 - Only proceed if the user's question clearly requires tool usage
+- **CRITICAL: Check if the required tool is available in AVAILABLE_TOOLS section**
+- If the tool is NOT available, tell the user clearly that the tool is not available
 - If the question can be answered from your knowledge, answer directly without tools
-- If tools are needed, identify the most relevant tool
+- If tools are needed and available, identify the most relevant tool
 
 Step 3: Use tools (if necessary)
 - Use the most relevant tool to answer the question
@@ -214,13 +306,16 @@ For tool-assisted answers: (Appropriate response based on tool output)
 """
 
 
-SYSTEM_PROMPT = get_system_prompt()
+# 시스템 프롬프트는 동적으로 생성되므로 여기서는 기본값만 설정
+# 실제 사용 시 get_system_prompt(tools)로 호출
 
 # OUTPUT_TOKEN_INFO는 이제 ModelManager에서 관리되므로 제거
 # 모델별 토큰 정보는 model_providers.py의 ModelConfig에서 관리됨
 
 # 시스템 설정
-TIMEOUT_SECONDS = 120
+TIMEOUT_SECONDS = (
+    300  # YouTube Transcript 등 시간이 오래 걸리는 작업을 위해 300초로 증가
+)
 RECURSION_LIMIT = 100
 
 # 세션 상태 초기화
@@ -241,19 +336,189 @@ if "thread_id" not in st.session_state:
 # --- 함수 정의 부분 ---
 
 
+async def cleanup_browser_processes():
+    """
+    실행 중인 브라우저 프로세스를 강제로 종료합니다.
+    """
+    try:
+        import subprocess
+
+        # Chrome/Chromium 프로세스 종료
+        subprocess.run(
+            ["pkill", "-f", "chrome"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+        subprocess.run(
+            ["pkill", "-f", "chromium"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+        # mcp-chrome 관련 프로세스 종료
+        subprocess.run(
+            ["pkill", "-f", "mcp-chrome"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+    except Exception:
+        # 프로세스 종료 실패는 치명적이지 않음
+        pass
+
+
+async def cleanup_browser_cache():
+    """
+    브라우저 캐시 디렉토리를 정리합니다.
+    락 파일, 소켓 파일, 임시 파일까지 완전히 정리합니다.
+    """
+    try:
+        import shutil
+        import glob
+
+        playwright_cache = os.path.expanduser("~/.cache/ms-playwright")
+        if os.path.exists(playwright_cache):
+            # mcp-chrome 디렉토리 완전히 제거
+            mcp_chrome_path = os.path.join(playwright_cache, "mcp-chrome")
+            if os.path.exists(mcp_chrome_path):
+                try:
+                    # 먼저 모든 락 파일과 소켓 파일 제거
+                    for pattern in ["**/SingletonLock", "**/*.lock", "**/*.socket"]:
+                        for lock_file in glob.glob(
+                            os.path.join(mcp_chrome_path, pattern), recursive=True
+                        ):
+                            try:
+                                os.remove(lock_file)
+                            except Exception:
+                                pass
+                    # 디렉토리 전체 삭제
+                    shutil.rmtree(mcp_chrome_path, ignore_errors=True)
+                except Exception:
+                    pass
+
+        # /tmp의 playwright 관련 파일들도 정리
+        try:
+            for tmp_pattern in ["/tmp/.org.chromium.*", "/tmp/playwright-*"]:
+                for tmp_file in glob.glob(tmp_pattern):
+                    try:
+                        if os.path.isdir(tmp_file):
+                            shutil.rmtree(tmp_file, ignore_errors=True)
+                        else:
+                            os.remove(tmp_file)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    except Exception:
+        # 브라우저 캐시 정리 실패는 치명적이지 않음
+        pass
+
+
 async def cleanup_mcp_client():
     """
     기존 MCP 클라이언트를 안전하게 종료합니다.
 
     기존 클라이언트가 있는 경우 정상적으로 리소스를 해제합니다.
+    MCP 서버 프로세스와 브라우저 인스턴스를 정리합니다.
     """
     if "mcp_client" in st.session_state and st.session_state.mcp_client is not None:
         try:
-            # 새로운 API에서는 별도의 종료 메서드가 필요하지 않음
+            client = st.session_state.mcp_client
+            # MultiServerMCPClient의 종료 메서드가 있는지 확인하고 호출
+            if hasattr(client, "close"):
+                try:
+                    await client.close()
+                except Exception:
+                    # close 메서드가 async가 아닐 수 있음
+                    try:
+                        client.close()
+                    except Exception:
+                        pass
+            elif hasattr(client, "disconnect"):
+                try:
+                    await client.disconnect()
+                except Exception:
+                    try:
+                        client.disconnect()
+                    except Exception:
+                        pass
+            elif hasattr(client, "shutdown"):
+                try:
+                    await client.shutdown()
+                except Exception:
+                    try:
+                        client.shutdown()
+                    except Exception:
+                        pass
+
+            # 클라이언트 참조 제거
             st.session_state.mcp_client = None
+
+            # 브라우저 프로세스 및 캐시 정리
+            await cleanup_browser_processes()
+            await cleanup_browser_cache()
+
+            # MCP 서버 프로세스 강제 종료
+            try:
+                import subprocess
+
+                # playwright-mcp 관련 프로세스 종료
+                subprocess.run(
+                    ["pkill", "-f", "@microsoft/playwright-mcp"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=5,
+                )
+                subprocess.run(
+                    ["pkill", "-f", "@smithery/cli"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=5,
+                )
+                # npx 프로세스 정리
+                subprocess.run(
+                    ["pkill", "-f", "npx"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=5,
+                )
+            except Exception:
+                pass
+
         except Exception as e:
             import traceback
+            import subprocess
 
+            # 오류가 발생해도 클라이언트 참조는 제거
+            st.session_state.mcp_client = None
+            # 브라우저 프로세스 및 캐시 정리 시도
+            await cleanup_browser_processes()
+            await cleanup_browser_cache()
+
+            # MCP 서버 프로세스 강제 종료
+            try:
+                subprocess.run(
+                    ["pkill", "-f", "@microsoft/playwright-mcp"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=5,
+                )
+                subprocess.run(
+                    ["pkill", "-f", "@smithery/cli"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=5,
+                )
+                subprocess.run(
+                    ["pkill", "-f", "npx"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=5,
+                )
+            except Exception:
+                pass
             # st.warning(f"MCP 클라이언트 종료 중 오류: {str(e)}")
             # st.warning(traceback.format_exc())
 
@@ -397,17 +662,19 @@ def get_streaming_callback(text_placeholder, tool_placeholder):
 
 async def cleanup_incomplete_tool_calls(agent, thread_id):
     """
-    체크포인터에서 불러온 히스토리에서 불완전한 tool_calls를 정리합니다.
+    체크포인터에서 불러온 히스토리에서 불완전한 tool_calls를 확인하고 정리합니다.
 
     tool_calls가 있는 AIMessage가 있지만 대응하는 ToolMessage가 없는 경우,
-    해당 tool_calls를 제거하여 메시지 히스토리를 정리합니다.
+    해당 tool_calls를 제거하거나 에러 ToolMessage를 생성하여 히스토리를 정리합니다.
+
+    Returns:
+        bool: 불완전한 tool_calls가 발견되어 정리했으면 True, 그렇지 않으면 False
     """
     try:
         # 체크포인터에서 현재 히스토리 불러오기
         config = RunnableConfig(thread_id=thread_id)
 
         # LangGraph의 get_state 메서드를 통해 상태 가져오기
-        # CompiledGraph는 get_state 메서드를 가지고 있음
         if hasattr(agent, "get_state"):
             checkpoint = await agent.get_state(config)
 
@@ -415,7 +682,7 @@ async def cleanup_incomplete_tool_calls(agent, thread_id):
                 messages = checkpoint.values.get("messages", [])
 
                 if not messages:
-                    return
+                    return False
 
                 # 모든 ToolMessage의 tool_call_id 수집
                 tool_message_ids = set()
@@ -423,9 +690,9 @@ async def cleanup_incomplete_tool_calls(agent, thread_id):
                     if isinstance(msg, ToolMessage):
                         tool_message_ids.add(msg.tool_call_id)
 
-                # tool_calls가 있는 AIMessage 찾아서 정리
+                # tool_calls가 있는 AIMessage 찾아서 확인 및 정리
                 cleaned_messages = []
-                needs_update = False
+                needs_cleanup = False
 
                 for msg in messages:
                     if (
@@ -433,48 +700,99 @@ async def cleanup_incomplete_tool_calls(agent, thread_id):
                         and hasattr(msg, "tool_calls")
                         and msg.tool_calls
                     ):
-                        # 대응하는 ToolMessage가 없는 tool_calls 필터링
-                        valid_tool_calls = []
+                        # 대응하는 ToolMessage가 없는 tool_calls 찾기
+                        incomplete_tool_calls = []
                         for tc in msg.tool_calls:
                             tool_call_id = (
                                 tc.get("id")
                                 if isinstance(tc, dict)
                                 else getattr(tc, "id", None)
                             )
-                            if tool_call_id and tool_call_id in tool_message_ids:
-                                valid_tool_calls.append(tc)
+                            # tool_call_id가 있지만 대응하는 ToolMessage가 없는 경우
+                            if tool_call_id and tool_call_id not in tool_message_ids:
+                                incomplete_tool_calls.append(tc)
 
-                        if len(valid_tool_calls) < len(msg.tool_calls):
-                            needs_update = True
+                        # 불완전한 tool_calls가 있으면 정리
+                        if incomplete_tool_calls:
+                            needs_cleanup = True
+                            # 각 불완전한 tool_call에 대해 에러 ToolMessage 생성
+                            for tc in incomplete_tool_calls:
+                                tool_call_id = (
+                                    tc.get("id")
+                                    if isinstance(tc, dict)
+                                    else getattr(tc, "id", None)
+                                )
+                                tool_name = (
+                                    tc.get("name")
+                                    if isinstance(tc, dict)
+                                    else getattr(tc, "name", "unknown")
+                                )
+                                # 에러 ToolMessage 생성
+                                error_msg = ToolMessage(
+                                    content=f"도구 호출이 완료되지 않았습니다. 타임아웃 또는 네트워크 오류가 발생했을 수 있습니다. (tool: {tool_name})",
+                                    tool_call_id=tool_call_id,
+                                )
+                                cleaned_messages.append(error_msg)
+
+                            # tool_calls에서 완료된 것만 남기기
+                            valid_tool_calls = [
+                                tc
+                                for tc in msg.tool_calls
+                                if (
+                                    (
+                                        tc.get("id")
+                                        if isinstance(tc, dict)
+                                        else getattr(tc, "id", None)
+                                    )
+                                    in tool_message_ids
+                                )
+                            ]
+
+                            # 유효한 tool_calls가 있으면 남기고, 없으면 제거
                             if valid_tool_calls:
-                                # 일부 tool_calls만 유효한 경우
                                 cleaned_msg = AIMessage(
                                     content=msg.content,
                                     tool_calls=valid_tool_calls,
                                     id=getattr(msg, "id", None),
                                 )
+                                cleaned_messages.append(cleaned_msg)
                             else:
-                                # 모든 tool_calls가 유효하지 않은 경우, tool_calls 제거
+                                # 모든 tool_calls가 불완전한 경우, tool_calls 제거
                                 cleaned_msg = AIMessage(
                                     content=msg.content,
                                     id=getattr(msg, "id", None),
                                 )
-                            cleaned_messages.append(cleaned_msg)
+                                cleaned_messages.append(cleaned_msg)
                         else:
                             cleaned_messages.append(msg)
                     else:
                         cleaned_messages.append(msg)
 
-                # 정리된 메시지로 체크포인트 업데이트
-                if needs_update and hasattr(agent, "update_state"):
-                    await agent.update_state(config, {"messages": cleaned_messages})
+                # 정리된 메시지로 체크포인트 업데이트 시도
+                if needs_cleanup:
+                    try:
+                        # LangGraph의 update_state 메서드가 있는지 확인
+                        if hasattr(agent, "update_state"):
+                            await agent.update_state(
+                                config, {"messages": cleaned_messages}
+                            )
+                            return True
+                        else:
+                            # update_state가 없으면 새로운 thread_id가 필요함을 알림
+                            return True
+                    except Exception as update_error:
+                        # 업데이트 실패 시 새로운 thread_id 필요
+                        print(f"Warning: Failed to update checkpoint: {update_error}")
+                        return True
+
+        return False  # 불완전한 tool_calls 없음
     except Exception as e:
-        # 에러가 발생해도 계속 진행 (히스토리 정리 실패는 치명적이지 않음)
-        # 새로운 thread_id를 사용하거나 다른 방법으로 처리 가능
+        # 에러가 발생하면 안전을 위해 True를 반환하여 새로운 thread_id 생성
         import traceback
 
-        print(f"Warning: Failed to cleanup incomplete tool calls: {e}")
+        print(f"Warning: Failed to check incomplete tool calls: {e}")
         print(traceback.format_exc())
+        return True  # 에러 발생 시 새로운 thread_id 생성
 
 
 async def process_query(query, text_placeholder, tool_placeholder, timeout_seconds=60):
@@ -497,10 +815,32 @@ async def process_query(query, text_placeholder, tool_placeholder, timeout_secon
     """
     try:
         if st.session_state.agent:
-            # 불완전한 tool_calls 정리 (히스토리 검증)
-            await cleanup_incomplete_tool_calls(
+            # Playwright 도구 사용 전 브라우저 프로세스 사전 정리 (충돌 방지)
+            # playwright-mcp 도구가 있는 경우에만 실행
+            if st.session_state.mcp_client:
+                try:
+                    tools = await st.session_state.mcp_client.get_tools()
+                    tool_names = [tool.name for tool in tools]
+                    # playwright 관련 도구가 있는 경우 브라우저 프로세스 정리
+                    if any(
+                        "browser" in name.lower() or "navigate" in name.lower()
+                        for name in tool_names
+                    ):
+                        await cleanup_browser_processes()
+                        await cleanup_browser_cache()
+                except Exception:
+                    # 도구 확인 실패는 무시
+                    pass
+
+            # 불완전한 tool_calls 확인 (히스토리 검증)
+            needs_new_thread = await cleanup_incomplete_tool_calls(
                 st.session_state.agent, st.session_state.thread_id
             )
+
+            # 불완전한 tool_calls가 있으면 새로운 thread_id 생성
+            if needs_new_thread:
+                st.session_state.thread_id = random_uuid()
+                st.session_state.history = []  # 히스토리도 초기화
 
             streaming_callback, accumulated_text_obj, accumulated_tool_obj = (
                 get_streaming_callback(text_placeholder, tool_placeholder)
@@ -533,9 +873,69 @@ async def process_query(query, text_placeholder, tool_placeholder, timeout_secon
             )
     except Exception as e:
         import traceback
+        import shutil
 
-        error_msg = f"❌ 쿼리 처리 중 오류 발생: {str(e)}\n{traceback.format_exc()}"
-        return {"error": error_msg}, error_msg, ""
+        error_str = str(e)
+        error_msg = f"❌ 쿼리 처리 중 오류 발생: {error_str}"
+
+        # Playwright 브라우저 인스턴스 충돌 오류 처리
+        if "Browser is already in use" in error_str or "mcp-chrome" in error_str:
+            # 브라우저 프로세스 및 캐시 정리
+            await cleanup_browser_processes()
+            await cleanup_browser_cache()
+
+            # MCP 클라이언트 완전히 재초기화
+            await cleanup_mcp_client()
+
+            # playwright 관련 MCP 서버 프로세스 강제 종료
+            try:
+                import subprocess
+
+                # playwright-mcp 관련 프로세스 종료
+                subprocess.run(
+                    ["pkill", "-f", "@microsoft/playwright-mcp"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=5,
+                )
+                subprocess.run(
+                    ["pkill", "-f", "@smithery/cli"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=5,
+                )
+            except Exception:
+                pass
+
+            error_msg = f"⚠️ 브라우저 인스턴스 충돌이 감지되었습니다. MCP 세션을 재초기화해야 합니다.\n\n원본 에러: {error_str}"
+            return (
+                {
+                    "error": error_msg,
+                    "browser_conflict": True,
+                    "need_reinit": True,
+                },
+                error_msg,
+                "",
+            )
+
+        # desktop-commander의 세션 만료 에러 처리
+        if "Search session" in error_str and "not found" in error_str:
+            # 세션 만료된 경우 새로운 thread_id로 대화 초기화
+            st.session_state.thread_id = random_uuid()
+            error_msg = f"⚠️ 세션이 만료되었습니다. 대화를 초기화했습니다. 다시 시도해주세요.\n\n원본 에러: {error_str}"
+            return {"error": error_msg, "session_expired": True}, error_msg, ""
+
+        # ToolMessage 누락 에러 처리
+        if "tool_calls that do not have a corresponding ToolMessage" in error_str:
+            # 불완전한 tool_calls가 있는 경우 새로운 thread_id로 대화 초기화
+            st.session_state.thread_id = random_uuid()
+            st.session_state.history = []  # 히스토리도 초기화
+            error_msg = f"⚠️ 메시지 히스토리에 문제가 발견되어 대화를 초기화했습니다. 다시 시도해주세요.\n\n원본 에러: {error_str}"
+            return {"error": error_msg, "session_expired": True}, error_msg, ""
+
+        # 상세 에러 정보 (디버깅용)
+        error_detail = f"\n{traceback.format_exc()}"
+        return {"error": error_msg + error_detail}, error_msg + error_detail, ""
 
 
 async def initialize_session(mcp_config=None):
@@ -638,11 +1038,13 @@ async def initialize_session(mcp_config=None):
             # 4. LangGraph 에이전트 생성
             st.info("🔧 AI 에이전트 구성 중...")
             try:
+                # 사용 가능한 도구 목록을 포함한 시스템 프롬프트 생성
+                system_prompt = get_system_prompt(available_tools=tools)
                 agent = create_react_agent(
                     model,
                     tools,
                     checkpointer=MemorySaver(),
-                    prompt=SYSTEM_PROMPT,
+                    prompt=system_prompt,
                 )
                 st.session_state.agent = agent
                 st.session_state.session_initialized = True
@@ -955,6 +1357,17 @@ with mcp_container:
 
     st.divider()
 
+    # 환경 정보 표시
+    is_container = os.environ.get("IS_CONTAINER", "false").lower() == "true"
+    env_icon = "🐳" if is_container else "💻"
+    env_name = "컨테이너 환경" if is_container else "로컬 환경"
+    st.info(f"{env_icon} **현재 환경**: {env_name}")
+
+    if is_container:
+        st.caption("⚠️ 컨테이너 환경에서는 일부 도구가 자동으로 제외됩니다.")
+
+    st.divider()
+
     # 현재 적용된 MCP 서버 리스트
     st.markdown("### 📋 현재 적용된 MCP 서버")
 
@@ -970,11 +1383,37 @@ with mcp_container:
     try:
         pending_config = st.session_state.pending_mcp_config
         if pending_config:
+            is_container = os.environ.get("IS_CONTAINER", "false").lower() == "true"
+
             for i, (tool_name, tool_config) in enumerate(pending_config.items()):
                 with st.container():
                     col1, col2 = st.columns([4, 1])
                     with col1:
-                        st.markdown(f"**{tool_name}**")
+                        # 메타데이터 정보 가져오기
+                        metadata = MCP_TOOLS_METADATA.get(tool_name, {})
+                        is_compatible = metadata.get("container_compatible", True)
+                        description = metadata.get("description", "")
+                        category = metadata.get("category", "")
+                        note = metadata.get("note", "")
+
+                        # 도구 이름과 호환성 표시
+                        title_parts = [f"**{tool_name}**"]
+                        if description:
+                            title_parts.append(f"- {description}")
+                        if category:
+                            title_parts.append(f"[{category}]")
+
+                        st.markdown(" ".join(title_parts))
+
+                        # 환경 호환성 경고
+                        if is_container and not is_compatible:
+                            st.warning(
+                                f"⚠️ 컨테이너 환경에서 사용 불가{': ' + note if note else ''}"
+                            )
+                        elif not is_container and not is_compatible:
+                            st.info(f"ℹ️ 로컬 환경 전용{': ' + note if note else ''}")
+
+                        # 커맨드/URL 정보
                         if "command" in tool_config:
                             st.caption(
                                 f"Command: {tool_config['command']} {' '.join(tool_config.get('args', [])[:2])}..."
@@ -1143,18 +1582,43 @@ with mcp_container:
 
     # 기본 서버 복원 버튼
     if st.button(
-        "🔄 기본 서버 복원 (시간)",
+        "🔄 기본 서버 복원",
         key="restore_default_mcp_tools",
         use_container_width=True,
     ):
-        # 기본 설정 정의
-        default_tools = {
+        # 컨테이너 환경 확인
+        is_container = os.environ.get("IS_CONTAINER", "false").lower() == "true"
+
+        # 기본 설정 정의 (모든 도구)
+        all_default_tools = {
             "get_current_time": {
                 "command": "python",
                 "args": ["./mcp_servers/time.py"],
                 "transport": "stdio",
             },
+            "playwright-mcp": {
+                "command": "npx",
+                "args": [
+                    "-y",
+                    "@smithery/cli@latest",
+                    "run",
+                    "@microsoft/playwright-mcp",
+                    "--key",
+                    "8f1bc671-fe10-43cd-8da1-b76a057f3c0a",
+                ],
+                "transport": "stdio",
+            },
         }
+
+        # 환경에 따라 호환 가능한 도구만 필터링
+        default_tools = {}
+        for tool_name, tool_config in all_default_tools.items():
+            metadata = MCP_TOOLS_METADATA.get(tool_name, {})
+            is_compatible = metadata.get("container_compatible", True)
+
+            # 컨테이너 환경이면 호환 가능한 도구만, 아니면 모든 도구 포함
+            if not is_container or is_compatible:
+                default_tools[tool_name] = tool_config
 
         # 기존에 없는 기본 도구만 추가
         added_tools = []
@@ -1238,6 +1702,26 @@ if user_query:
                 )
             if "error" in resp:
                 st.error(resp["error"])
+                # 세션 만료된 경우 자동으로 대화 초기화 및 재시도 안내
+                if resp.get("session_expired"):
+                    st.info("💡 새로운 대화가 시작되었습니다. 다시 질문해주세요.")
+                    st.session_state.history = []  # 히스토리도 초기화
+                    st.rerun()
+                # 브라우저 충돌 오류 처리 - 자동 재초기화
+                elif resp.get("browser_conflict"):
+                    if resp.get("need_reinit"):
+                        # MCP 세션을 무효화하여 재초기화 유도
+                        st.session_state.session_initialized = False
+                        st.session_state.agent = None
+                        st.warning(
+                            "⚠️ 브라우저 인스턴스 충돌로 인해 MCP 세션이 종료되었습니다."
+                        )
+                        st.info(
+                            "💡 'MCP 도구' 탭에서 '설정 적용하기'를 클릭하여 세션을 재초기화한 후 다시 시도해주세요."
+                        )
+                        st.rerun()
+                    else:
+                        st.info("💡 브라우저 캐시를 정리했습니다. 다시 질문해주세요.")
             else:
                 st.session_state.history.append({"role": "user", "content": user_query})
                 st.session_state.history.append(
