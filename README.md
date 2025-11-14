@@ -109,11 +109,13 @@ streamlit run app.py
 | 도구               | 컨테이너 | 로컬 | 설명                                                |
 | ------------------ | -------- | ---- | --------------------------------------------------- |
 | `get_current_time` | ✅       | ✅   | 시간 관련 계산                                      |
+| `weather`          | ✅       | ✅   | OpenWeatherMap 날씨 조회                            |
 | `playwright-mcp`   | ❌       | ✅   | 브라우저 자동화 (컨테이너에서 브라우저 프로필 충돌) |
 
 ### 내장 서버
 
 - `mcp_servers/time.py`: 시간 관련 계산 (🐳 컨테이너 호환)
+- `mcp_servers/weather.py`: OpenWeatherMap 날씨 조회 (🐳 컨테이너 호환)
 - `mcp_servers/fitness.py`: 헬스 계산기 (🐳 컨테이너 호환)
 
 ### 외부 서버 추가
@@ -198,10 +200,10 @@ docker run -d -p 8501:8501 --name nxt-mcp-gateway glen15/nxt-mcp-gateway:latest
 # MCP 설정 파일 마운트 (권장: 설정이 호스트에 영구 저장됨)
 docker run -p 8501:8501 -v $(pwd)/mcp_config.json:/app/mcp_config.json glen15/nxt-mcp-gateway:latest
 
-# 환경 변수로 설정 파일 경로 지정
-docker run -p 8501:8501 \
-  -v $(pwd)/config:/app/config \
-  -e MCP_CONFIG_PATH=/app/config/mcp_config.json \
+# 백그라운드에서 실행 (권장)
+docker run -d -p 8501:8501 \
+  --name nxt-mcp-gateway \
+  -v $(pwd)/mcp_config.json:/app/mcp_config.json \
   glen15/nxt-mcp-gateway:latest
 ```
 

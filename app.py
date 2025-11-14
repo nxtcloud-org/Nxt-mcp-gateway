@@ -40,6 +40,11 @@ MCP_TOOLS_METADATA = {
         "description": "현재 시간 조회",
         "category": "유틸리티",
     },
+    "weather": {
+        "container_compatible": True,
+        "description": "OpenWeatherMap 날씨 조회",
+        "category": "정보 조회",
+    },
     "playwright-mcp": {
         "container_compatible": False,
         "description": "브라우저 자동화 (Playwright)",
@@ -67,6 +72,11 @@ def load_config_from_json():
         "get_current_time": {
             "command": "python",
             "args": ["./mcp_servers/time.py"],
+            "transport": "stdio",
+        },
+        "weather": {
+            "command": "python",
+            "args": ["./mcp_servers/weather.py"],
             "transport": "stdio",
         },
         "playwright-mcp": {
@@ -1594,6 +1604,11 @@ with mcp_container:
             "get_current_time": {
                 "command": "python",
                 "args": ["./mcp_servers/time.py"],
+                "transport": "stdio",
+            },
+            "weather": {
+                "command": "python",
+                "args": ["./mcp_servers/weather.py"],
                 "transport": "stdio",
             },
             "playwright-mcp": {

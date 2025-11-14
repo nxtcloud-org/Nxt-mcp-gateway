@@ -6,6 +6,13 @@
     ],
     "transport": "stdio"
   },
+  "weather": {
+    "command": "python",
+    "args": [
+      "./mcp_servers/weather.py"
+    ],
+    "transport": "stdio"
+  },
   "playwright-mcp": {
     "command": "npx",
     "args": [
@@ -15,16 +22,6 @@
       "@microsoft/playwright-mcp",
       "--key",
       "8f1bc671-fe10-43cd-8da1-b76a057f3c0a"
-    ],
-    "transport": "stdio"
-  },
-  "freecad": {
-    "command": "uv",
-    "args": [
-      "--directory",
-      "/Users/glen/Library/Application Support/FreeCAD/freecad-mcp",
-      "run",
-      "freecad-mcp"
     ],
     "transport": "stdio"
   }
