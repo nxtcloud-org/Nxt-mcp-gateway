@@ -6,13 +6,6 @@
     ],
     "transport": "stdio"
   },
-  "weather": {
-    "command": "python",
-    "args": [
-      "./mcp_servers/weather.py"
-    ],
-    "transport": "stdio"
-  },
   "playwright-mcp": {
     "command": "npx",
     "args": [

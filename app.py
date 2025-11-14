@@ -67,16 +67,11 @@ def load_config_from_json():
     # 컨테이너 환경 확인
     is_container = os.environ.get("IS_CONTAINER", "false").lower() == "true"
 
-    # 기본 설정 정의 (모든 도구)
+    # 기본 설정 정의 (자동 로드되는 기본 도구)
     all_default_configs = {
         "get_current_time": {
             "command": "python",
             "args": ["./mcp_servers/time.py"],
-            "transport": "stdio",
-        },
-        "weather": {
-            "command": "python",
-            "args": ["./mcp_servers/weather.py"],
             "transport": "stdio",
         },
         "playwright-mcp": {
@@ -1308,10 +1303,10 @@ with mcp_container:
     st.markdown("💡 중괄호 숫자를 잘 확인하고 JSON 형식을 체크해주세요")
 
     # 예시 JSON 정의
-    fitness_example = {
-        "fitness_calculator": {
+    weather_example = {
+        "weather": {
             "command": "python",
-            "args": ["./mcp_servers/fitness.py"],
+            "args": ["./mcp_servers/weather.py"],
             "transport": "stdio",
         }
     }
@@ -1333,9 +1328,9 @@ with mcp_container:
 
     # 예시 섹션
     with st.expander("📋 예시 JSON 복사하기", expanded=False):
-        st.markdown("**1. 헬스 계산기 (fitness.py)**")
+        st.markdown("**1. 날씨 서버 (OpenWeatherMap)**")
         st.code(
-            json.dumps(fitness_example, indent=2, ensure_ascii=False),
+            json.dumps(weather_example, indent=2, ensure_ascii=False),
             language="json",
         )
         st.markdown("**2. Desktop Commander (외부 서버)**")
@@ -1454,16 +1449,11 @@ with mcp_container:
         # 컨테이너 환경 확인
         is_container = os.environ.get("IS_CONTAINER", "false").lower() == "true"
 
-        # 기본 설정 정의 (모든 도구)
+        # 기본 설정 정의 (자동 복원되는 기본 도구)
         all_default_tools = {
             "get_current_time": {
                 "command": "python",
                 "args": ["./mcp_servers/time.py"],
-                "transport": "stdio",
-            },
-            "weather": {
-                "command": "python",
-                "args": ["./mcp_servers/weather.py"],
                 "transport": "stdio",
             },
             "playwright-mcp": {
